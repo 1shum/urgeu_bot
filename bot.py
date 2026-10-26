@@ -13,7 +13,7 @@ from telegram.ext import (
 from parser_rasp import get_schedule_for_date, get_schedule_for_week
 
 # Вставь сюда токен, полученный от @BotFather
-BOT_TOKEN = "8970456575:AAHvSbWVL3CSri_lrOmapCRcPsbmZyul3FY"
+BOT_TOKEN = "8970456575:AAFUoFW-hT0pcNJE0mfE3Xzx_Wq9-pkFU40"
 DEFAULT_GROUP = "ПИЭ-26-2"
 
 # Клавиатура с быстрыми кнопками
@@ -89,7 +89,7 @@ def main() -> None:
     threading.Thread(target=run_fake_server, daemon=True).start()
 
     print("Бот запускается...")
-    app = ApplicationBuilder().token("8970456575:AAHvSbWVL3CSri_lr0mapCRcPsbmZyul3FY").build()
+    app = ApplicationBuilder().token("8970456575:AAFUoFW-hT0pcNJE0mfE3Xzx_Wq9-pkFU40").build()
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(
