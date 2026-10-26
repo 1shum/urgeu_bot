@@ -19,39 +19,52 @@ from parser_rasp import get_schedule_for_date, get_schedule_for_week
 BOT_TOKEN = "8970456575:AAFUoFW-hT0pcNJE0mfE3Xzx_Wq9-pkFU40"
 DEFAULT_GROUP = "ПИЭ-26-2"
 
-# Inline-клавиатура под сообщением
-INLINE_KEYBOARD = [
+# Клавиатура главного меню
+MAIN_MENU_KEYBOARD = InlineKeyboardMarkup([
     [
-        InlineKeyboardButton("Сегодня", callback_data="today"),
-        InlineKeyboardButton("Завтра", callback_data="tomorrow"),
+        InlineKeyboardButton("📅 Сегодня", callback_data="today"),
+        InlineKeyboardButton("📆 Завтра", callback_data="tomorrow"),
     ],
     [
-        InlineKeyboardButton("Вся неделя", callback_data="week_current"),
-        InlineKeyboardButton("След. неделя", callback_data="week_next"),
+        InlineKeyboardButton("🗓 Текущая неделя", callback_data="week_current"),
+        InlineKeyboardButton("⏭ След. неделя", callback_data="week_next"),
     ],
-]
-REPLY_MARKUP = InlineKeyboardMarkup(INLINE_KEYBOARD)
+])
 
+# Клавиатура, которая показывается под расписанием (с кнопкой "Назад")
+SCHEDULE_KEYBOARD = InlineKeyboardMarkup([
+    [
+        InlineKeyboardButton("◀️ Главное меню", callback_data="main_menu"),
+    ]
+])
+
+
+
+
+def get_welcome_text(user_name: str) -> str:
+    """Формирует текст главного экрана меню."""
+    return (
+        f"👋 Привет, {user_name}!\n\n"
+        f"🏛 **Бот расписания УрГЭУ**\n"
+        f"👥 Группа: `{DEFAULT_GROUP}`\n\n"
+        f"Выбери нужный раздел в меню ниже 👇"
+    )
 
 
 async def start_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Обработчик команды /start."""
+    """Обработчик команды /start при первом запуске."""
     user_name = update.effective_user.first_name
-    welcome_text = (
-        f"Привет, {user_name}! 👋\n\n"
-        f"Я бот с актуальным расписанием пар УрГЭУ.\n"
-        f"Текущая группа: `{DEFAULT_GROUP}`\n\n"
-        f"Выбери нужный день ниже 👇"
-    )
-    # Принудительно убираем старую нижнюю клавиатуру
-    temp_msg = await update.message.reply_text("🧹", reply_markup=ReplyKeyboardRemove())
+    welcome_text = get_welcome_text(user_name)
+
+    # Убираем старую нижнюю панель с кнопками
+    temp_msg = await update.message.reply_text("⏳", reply_markup=ReplyKeyboardRemove())
     await temp_msg.delete()
 
-    # Отправляем меню только с inline-кнопками
+    # Отправляем главное меню
     await update.message.reply_text(
-        welcome_text, parse_mode="Markdown", reply_markup=REPLY_MARKUP
+        welcome_text, parse_mode="Markdown", reply_markup=MAIN_MENU_KEYBOARD
     )
 
 
@@ -59,34 +72,45 @@ async def start_command(
 async def handle_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Обработчик нажатий на кнопки с редактированием сообщения."""
+    """Обработчик нажатий на Inline-кнопки."""
     query = update.callback_query
     await query.answer()
 
     data = query.data
     today = datetime.now()
 
-    if data == "today":
-        msg = get_schedule_for_date(DEFAULT_GROUP, today)
-    elif data == "tomorrow":
-        target = today + timedelta(days=1)
-        msg = get_schedule_for_date(DEFAULT_GROUP, target)
-    elif data == "week_current":
-        msg = get_schedule_for_week(DEFAULT_GROUP, next_week=False)
-    elif data == "week_next":
-        msg = get_schedule_for_week(DEFAULT_GROUP, next_week=True)
+    # Если нажали "Назад в главное меню"
+    if data == "main_menu":
+        user_name = query.from_user.first_name
+        text = get_welcome_text(user_name)
+        reply_markup = MAIN_MENU_KEYBOARD
+
+    # Если выбрали просмотр расписания
     else:
-        msg = "Неизвестная команда."
+        if data == "today":
+            text = get_schedule_for_date(DEFAULT_GROUP, today)
+        elif data == "tomorrow":
+            target = today + timedelta(days=1)
+            text = get_schedule_for_date(DEFAULT_GROUP, target)
+        elif data == "week_current":
+            text = get_schedule_for_week(DEFAULT_GROUP, next_week=False)
+        elif data == "week_next":
+            text = get_schedule_for_week(DEFAULT_GROUP, next_week=True)
+        else:
+            text = "Неизвестная команда."
+
+        reply_markup = SCHEDULE_KEYBOARD
 
     try:
         await query.edit_message_text(
-            text=msg,
+            text=text,
             parse_mode="Markdown",
-            reply_markup=REPLY_MARKUP,
+            reply_markup=reply_markup,
         )
     except BadRequest as e:
         if "Message is not modified" not in str(e):
             raise e
+
 
 
 
@@ -117,6 +141,4 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    main()
-
     main()
