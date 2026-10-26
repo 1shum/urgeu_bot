@@ -1,6 +1,7 @@
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -18,7 +19,7 @@ from parser_rasp import get_schedule_for_date, get_schedule_for_week
 # Вставь сюда токен, полученный от @BotFather
 BOT_TOKEN = "8970456575:AAFUoFW-hT0pcNJE0mfE3Xzx_Wq9-pkFU40"
 DEFAULT_GROUP = "ПИЭ-26-2"
-
+TIMEZONE = ZoneInfo("Asia/Yekaterinburg")
 # Клавиатура главного меню
 MAIN_MENU_KEYBOARD = InlineKeyboardMarkup([
     [
@@ -77,7 +78,7 @@ async def handle_callback(
     await query.answer()
 
     data = query.data
-    today = datetime.now()
+    today = datetime.now(TIMEZONE)
 
     # Если нажали "Назад в главное меню"
     if data == "main_menu":
