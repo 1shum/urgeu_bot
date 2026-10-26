@@ -1,7 +1,7 @@
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder,
@@ -43,11 +43,17 @@ async def start_command(
         f"Привет, {user_name}! 👋\n\n"
         f"Я бот с актуальным расписанием пар УрГЭУ.\n"
         f"Текущая группа: `{DEFAULT_GROUP}`\n\n"
-        f"Выбери нужный день на кнопках ниже 👇"
+        f"Выбери нужный день ниже 👇"
     )
+    # Принудительно убираем старую нижнюю клавиатуру
+    temp_msg = await update.message.reply_text("🧹", reply_markup=ReplyKeyboardRemove())
+    await temp_msg.delete()
+
+    # Отправляем меню только с inline-кнопками
     await update.message.reply_text(
         welcome_text, parse_mode="Markdown", reply_markup=REPLY_MARKUP
     )
+
 
 
 async def handle_callback(
