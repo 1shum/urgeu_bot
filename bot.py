@@ -28,9 +28,10 @@ MAIN_MENU_KEYBOARD = InlineKeyboardMarkup([
     ],
     [
         InlineKeyboardButton("🗓 Текущая неделя", callback_data="week_current"),
-        InlineKeyboardButton("⏭ След. неделя", callback_data="week_next"),
+        InlineKeyboardButton("📆 Выбрать день", callback_data="pick_date"),
     ],
 ])
+
 
 # Клавиатура, которая показывается под расписанием (с кнопкой "Назад")
 SCHEDULE_KEYBOARD = InlineKeyboardMarkup([
@@ -56,6 +57,7 @@ async def start_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Обработчик команды /start при первом запуске."""
+    context.user_data["waiting_for_date"] = False
     user_name = update.effective_user.first_name
     welcome_text = get_welcome_text(user_name)
 
@@ -67,6 +69,7 @@ async def start_command(
     await update.message.reply_text(
         welcome_text, parse_mode="Markdown", reply_markup=MAIN_MENU_KEYBOARD
     )
+
 
 
 
@@ -82,12 +85,24 @@ async def handle_callback(
 
     # Если нажали "Назад в главное меню"
     if data == "main_menu":
+        context.user_data["waiting_for_date"] = False
         user_name = query.from_user.first_name
         text = get_welcome_text(user_name)
         reply_markup = MAIN_MENU_KEYBOARD
 
-    # Если выбрали просмотр расписания
+    # Если нажали "Выбрать день"
+    elif data == "pick_date":
+        context.user_data["waiting_for_date"] = True
+        text = (
+            "✍️ **Введите число и месяц** нужного дня в формате `ДД.ММ`\n\n"
+            "Например: `28.10` или `05.11`\n\n"
+            "Или нажмите кнопку ниже для отмены:"
+        )
+        reply_markup = SCHEDULE_KEYBOARD
+
+    # Если выбрали просмотр готовых кнопок
     else:
+        context.user_data["waiting_for_date"] = False
         if data == "today":
             text = get_schedule_for_date(DEFAULT_GROUP, today)
         elif data == "tomorrow":
@@ -95,8 +110,6 @@ async def handle_callback(
             text = get_schedule_for_date(DEFAULT_GROUP, target)
         elif data == "week_current":
             text = get_schedule_for_week(DEFAULT_GROUP, next_week=False)
-        elif data == "week_next":
-            text = get_schedule_for_week(DEFAULT_GROUP, next_week=True)
         else:
             text = "Неизвестная команда."
 
@@ -112,6 +125,45 @@ async def handle_callback(
         if "Message is not modified" not in str(e):
             raise e
 
+async def handle_user_text(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Обработка текстового сообщения с датой."""
+    user_input = update.message.text.strip()
+
+    # Проверяем, ожидал ли бот ввод даты
+    if context.user_data.get("waiting_for_date"):
+        try:
+            today = datetime.now(TIMEZONE)
+            # Парсим число и месяц
+            parsed_date = datetime.strptime(user_input, "%d.%m")
+            # Подставляем текущий год и часовой пояс
+            target_date = parsed_date.replace(year=today.year, tzinfo=TIMEZONE)
+
+            # Получаем расписание
+            schedule_text = get_schedule_for_date(DEFAULT_GROUP, target_date)
+            context.user_data["waiting_for_date"] = False
+
+            await update.message.reply_text(
+                schedule_text,
+                parse_mode="Markdown",
+                reply_markup=SCHEDULE_KEYBOARD,
+            )
+            return
+
+        except ValueError:
+            await update.message.reply_text(
+                "⚠️ Неверный формат даты. Пожалуйста, отправьте дату в виде `ДД.ММ` (например, `28.10`):",
+                parse_mode="Markdown",
+                reply_markup=SCHEDULE_KEYBOARD,
+            )
+            return
+
+    # Если пользователь прислал текст вне режима выбора даты
+    await update.message.reply_text(
+        "Пожалуйста, используйте кнопки меню для навигации.",
+        reply_markup=MAIN_MENU_KEYBOARD,
+    )
 
 
 
@@ -131,14 +183,15 @@ def main() -> None:
     threading.Thread(target=run_fake_server, daemon=True).start()
 
     print("Бот запускается...")
-    app = ApplicationBuilder().token("8970456575:AAFUoFW-hT0pcNJE0mfE3Xzx_Wq9-pkFU40").build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
-
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_text))
 
     print("✅ Бот успешно запущен и ожидает сообщений!")
     app.run_polling()
+
 
 
 if __name__ == '__main__':
