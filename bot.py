@@ -19,6 +19,7 @@ from parser_rasp import get_schedule_for_date, get_schedule_for_week
 # Вставь сюда токен, полученный от @BotFather
 BOT_TOKEN = "8970456575:AAFUoFW-hT0pcNJE0mfE3Xzx_Wq9-pkFU40"
 DEFAULT_GROUP = "ПИЭ-26-2"
+ADMIN_ID = 1087118817
 TIMEZONE = ZoneInfo("Asia/Yekaterinburg")
 # Клавиатура главного меню
 MAIN_MENU_KEYBOARD = InlineKeyboardMarkup([
@@ -30,7 +31,11 @@ MAIN_MENU_KEYBOARD = InlineKeyboardMarkup([
         InlineKeyboardButton("🗓 Текущая неделя", callback_data="week_current"),
         InlineKeyboardButton("📆 Выбрать день", callback_data="pick_date"),
     ],
+    [
+        InlineKeyboardButton("💬 Поддержка / Идеи", callback_data="feedback"),
+    ],
 ])
+
 
 
 # Клавиатура, которая показывается под расписанием (с кнопкой "Назад")
@@ -86,12 +91,26 @@ async def handle_callback(
     # Если нажали "Назад в главное меню"
     if data == "main_menu":
         context.user_data["waiting_for_date"] = False
+        context.user_data["waiting_for_feedback"] = False
         user_name = query.from_user.first_name
         text = get_welcome_text(user_name)
         reply_markup = MAIN_MENU_KEYBOARD
 
+    # Если нажали "Поддержка / Идеи"
+    elif data == "feedback":
+        context.user_data["waiting_for_date"] = False
+        context.user_data["waiting_for_feedback"] = True
+        context.user_data["menu_message_id"] = query.message.message_id
+        text = (
+            "💬 **Поддержка и предложения**\n\n"
+            "Напишите ваш отзыв, найденную ошибку или предложение следующим сообщением.\n\n"
+            "Оно будет напрямую передано разработчику бота!"
+        )
+        reply_markup = SCHEDULE_KEYBOARD
+
     # Если нажали "Выбрать день"
     elif data == "pick_date":
+        context.user_data["waiting_for_feedback"] = False
         context.user_data["waiting_for_date"] = True
         context.user_data["menu_message_id"] = query.message.message_id
         text = (
@@ -100,6 +119,7 @@ async def handle_callback(
             "Или нажмите кнопку ниже для отмены:"
         )
         reply_markup = SCHEDULE_KEYBOARD
+
 
 
     # Если выбрали просмотр готовых кнопок
@@ -130,13 +150,60 @@ async def handle_callback(
 async def handle_user_text(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Обработка текстового сообщения с датой и его автоудаление."""
+    """Обработка текстового сообщения с датой или отзывом и автоудаление."""
     user_input = update.message.text.strip()
     chat_id = update.effective_chat.id
 
-    # Проверяем, ожидал ли бот ввод даты
+    # 1. Если пользователь отправляет сообщение в поддержку
+    if context.user_data.get("waiting_for_feedback"):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+        menu_id = context.user_data.get("menu_message_id")
+        user = update.effective_user
+        username = f"@{user.username}" if user.username else "нет username"
+
+        admin_message = (
+            f"📩 **Новое обращение в поддержку!**\n\n"
+            f"👤 От: {user.first_name} ({username})\n"
+            f"🆔 ID: `{user.id}`\n\n"
+            f"💬 **Текст:**\n{user_input}"
+        )
+
+        # Отправка разработчику в ЛС
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=admin_message,
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            print(f"Ошибка отправки админу: {e}")
+
+        context.user_data["waiting_for_feedback"] = False
+
+        success_text = (
+            "✅ **Спасибо! Ваше сообщение отправлено.**\n\n"
+            "Разработчик обязательно его прочитает."
+        )
+
+        if menu_id:
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=menu_id,
+                    text=success_text,
+                    parse_mode="Markdown",
+                    reply_markup=SCHEDULE_KEYBOARD,
+                )
+            except BadRequest:
+                pass
+        return
+
+    # 2. Если пользователь вводит дату (ДД.ММ)
     if context.user_data.get("waiting_for_date"):
-        # Удаляем сообщение пользователя с датой, чтобы не засорять чат
         try:
             await update.message.delete()
         except Exception:
@@ -146,14 +213,12 @@ async def handle_user_text(
 
         try:
             today = datetime.now(TIMEZONE)
-            # Парсим число и месяц
             parsed_date = datetime.strptime(user_input, "%d.%m")
             target_date = parsed_date.replace(year=today.year, tzinfo=TIMEZONE)
 
             schedule_text = get_schedule_for_date(DEFAULT_GROUP, target_date)
             context.user_data["waiting_for_date"] = False
 
-            # Редактируем старое меню вместо отправки нового сообщения
             if menu_id:
                 await context.bot.edit_message_text(
                     chat_id=chat_id,
@@ -188,7 +253,7 @@ async def handle_user_text(
                     pass
             return
 
-    # Если пользователь прислал случайный текст вне режима ввода даты — удаляем сообщение
+    # Если пришёл сторонний текст вне режимов ввода — просто удаляем
     try:
         await update.message.delete()
     except Exception:
