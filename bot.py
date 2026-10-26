@@ -1,14 +1,17 @@
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
-from telegram import ReplyKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
+    CallbackQueryHandler,
     MessageHandler,
     filters,
 )
+
 
 from parser_rasp import get_schedule_for_date, get_schedule_for_week
 
@@ -16,14 +19,19 @@ from parser_rasp import get_schedule_for_date, get_schedule_for_week
 BOT_TOKEN = "8970456575:AAFUoFW-hT0pcNJE0mfE3Xzx_Wq9-pkFU40"
 DEFAULT_GROUP = "ПИЭ-26-2"
 
-# Клавиатура с быстрыми кнопками
-KEYBOARD = [
-    ["Сегодня", "Завтра"],
-    ["Вся неделя", "След. неделя"],
+# Inline-клавиатура под сообщением
+INLINE_KEYBOARD = [
+    [
+        InlineKeyboardButton("Сегодня", callback_data="today"),
+        InlineKeyboardButton("Завтра", callback_data="tomorrow"),
+    ],
+    [
+        InlineKeyboardButton("Вся неделя", callback_data="week_current"),
+        InlineKeyboardButton("След. неделя", callback_data="week_next"),
+    ],
 ]
-REPLY_MARKUP = ReplyKeyboardMarkup(
-    KEYBOARD, resize_keyboard=True, is_persistent=True
-)
+REPLY_MARKUP = InlineKeyboardMarkup(INLINE_KEYBOARD)
+
 
 
 async def start_command(
@@ -42,35 +50,38 @@ async def start_command(
     )
 
 
-async def handle_message(
+async def handle_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Обработчик нажатий на кнопки."""
-    text = update.message.text.strip().lower()
+    """Обработчик нажатий на кнопки с редактированием сообщения."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
     today = datetime.now()
 
-    if text == "сегодня":
+    if data == "today":
         msg = get_schedule_for_date(DEFAULT_GROUP, today)
-        await update.message.reply_text(msg, parse_mode="Markdown")
-
-    elif text == "завтра":
+    elif data == "tomorrow":
         target = today + timedelta(days=1)
         msg = get_schedule_for_date(DEFAULT_GROUP, target)
-        await update.message.reply_text(msg, parse_mode="Markdown")
-
-    elif text in ["вся неделя", "текущая неделя"]:
+    elif data == "week_current":
         msg = get_schedule_for_week(DEFAULT_GROUP, next_week=False)
-        await update.message.reply_text(msg, parse_mode="Markdown")
-
-    elif text in ["след. неделя", "следующая неделя"]:
+    elif data == "week_next":
         msg = get_schedule_for_week(DEFAULT_GROUP, next_week=True)
-        await update.message.reply_text(msg, parse_mode="Markdown")
-
     else:
-        await update.message.reply_text(
-            "Пожалуйста, используй кнопки внизу для выбора расписания.",
+        msg = "Неизвестная команда."
+
+    try:
+        await query.edit_message_text(
+            text=msg,
+            parse_mode="Markdown",
             reply_markup=REPLY_MARKUP,
         )
+    except BadRequest as e:
+        if "Message is not modified" not in str(e):
+            raise e
+
 
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -92,9 +103,8 @@ def main() -> None:
     app = ApplicationBuilder().token("8970456575:AAFUoFW-hT0pcNJE0mfE3Xzx_Wq9-pkFU40").build()
 
     app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
-    )
+    app.add_handler(CallbackQueryHandler(handle_callback))
+
 
     print("✅ Бот успешно запущен и ожидает сообщений!")
     app.run_polling()
@@ -103,5 +113,4 @@ def main() -> None:
 if __name__ == '__main__':
     main()
 
-if __name__ == "__main__":
     main()
