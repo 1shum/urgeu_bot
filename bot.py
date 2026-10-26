@@ -1,3 +1,5 @@
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import (
@@ -71,9 +73,23 @@ async def handle_message(
         )
 
 
-def main() -> None:njk
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+
+def run_fake_server():
+    server = HTTPServer(('0.0.0.0', 10000), HealthCheckHandler)
+    server.serve_forever()
+
+
+def main() -> None:
+    threading.Thread(target=run_fake_server, daemon=True).start()
+
     print("Бот запускается...")
-    app = ApplicationBuilder().token("8970456575:AAHvSbWVL3CSri_lrOmapCRcPsbmZyul3FY").build()
+    app = ApplicationBuilder().token("8970456575:AAHvSbWVL3CSri_lr0mapCRcPsbmZyul3FY").build()
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(
@@ -83,6 +99,9 @@ def main() -> None:njk
     print("✅ Бот успешно запущен и ожидает сообщений!")
     app.run_polling()
 
+
+if __name__ == '__main__':
+    main()
 
 if __name__ == "__main__":
     main()
