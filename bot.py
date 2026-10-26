@@ -93,12 +93,14 @@ async def handle_callback(
     # Если нажали "Выбрать день"
     elif data == "pick_date":
         context.user_data["waiting_for_date"] = True
+        context.user_data["menu_message_id"] = query.message.message_id
         text = (
             "✍️ **Введите число и месяц** нужного дня в формате `ДД.ММ`\n\n"
             "Например: `28.10` или `05.11`\n\n"
             "Или нажмите кнопку ниже для отмены:"
         )
         reply_markup = SCHEDULE_KEYBOARD
+
 
     # Если выбрали просмотр готовых кнопок
     else:
@@ -128,42 +130,70 @@ async def handle_callback(
 async def handle_user_text(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Обработка текстового сообщения с датой."""
+    """Обработка текстового сообщения с датой и его автоудаление."""
     user_input = update.message.text.strip()
+    chat_id = update.effective_chat.id
 
     # Проверяем, ожидал ли бот ввод даты
     if context.user_data.get("waiting_for_date"):
+        # Удаляем сообщение пользователя с датой, чтобы не засорять чат
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+        menu_id = context.user_data.get("menu_message_id")
+
         try:
             today = datetime.now(TIMEZONE)
             # Парсим число и месяц
             parsed_date = datetime.strptime(user_input, "%d.%m")
-            # Подставляем текущий год и часовой пояс
             target_date = parsed_date.replace(year=today.year, tzinfo=TIMEZONE)
 
-            # Получаем расписание
             schedule_text = get_schedule_for_date(DEFAULT_GROUP, target_date)
             context.user_data["waiting_for_date"] = False
 
-            await update.message.reply_text(
-                schedule_text,
-                parse_mode="Markdown",
-                reply_markup=SCHEDULE_KEYBOARD,
-            )
+            # Редактируем старое меню вместо отправки нового сообщения
+            if menu_id:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=menu_id,
+                    text=schedule_text,
+                    parse_mode="Markdown",
+                    reply_markup=SCHEDULE_KEYBOARD,
+                )
+            else:
+                await update.message.reply_text(
+                    schedule_text,
+                    parse_mode="Markdown",
+                    reply_markup=SCHEDULE_KEYBOARD,
+                )
             return
 
         except ValueError:
-            await update.message.reply_text(
-                "⚠️ Неверный формат даты. Пожалуйста, отправьте дату в виде `ДД.ММ` (например, `28.10`):",
-                parse_mode="Markdown",
-                reply_markup=SCHEDULE_KEYBOARD,
+            error_text = (
+                "⚠️ Неверный формат даты.\n\n"
+                "Пожалуйста, отправьте дату в виде `ДД.ММ` (например, `28.10`):"
             )
+            if menu_id:
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=menu_id,
+                        text=error_text,
+                        parse_mode="Markdown",
+                        reply_markup=SCHEDULE_KEYBOARD,
+                    )
+                except BadRequest:
+                    pass
             return
 
-    # Если пользователь прислал текст вне режима выбора даты
-    await update.message.reply_text(
-        "Пожалуйста, используйте кнопки меню для навигации.",
-        reply_markup=MAIN_MENU_KEYBOARD,
-    )
+    # Если пользователь прислал случайный текст вне режима ввода даты — удаляем сообщение
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
 
 
 
