@@ -11,8 +11,6 @@ from telegram import (
     Update,
 )
 from telegram.error import BadRequest
-
-from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -22,14 +20,14 @@ from telegram.ext import (
     filters,
 )
 
-
 from parser_rasp import get_schedule_for_date, get_schedule_for_week
 
-# Вставь сюда токен, полученный от @BotFather
+# Токен и базовые настройки
 BOT_TOKEN = "8970456575:AAFUoFW-hT0pcNJE0mfE3Xzx_Wq9-pkFU40"
 DEFAULT_GROUP = "ПИЭ-26-2"
 ADMIN_ID = 1087118817
 TIMEZONE = ZoneInfo("Asia/Yekaterinburg")
+
 BANNERS = {
     "main": "banners/main.png",
     "today": "banners/today.png",
@@ -54,7 +52,6 @@ def get_main_keyboard(subgroup: int = None) -> InlineKeyboardMarkup:
         ],
     ]
 
-    # Если подгруппа еще не выбрана — добавляем кнопку
     if not subgroup:
         buttons.append([
             InlineKeyboardButton("➕ Добавить подгруппу", callback_data="choose_subgroup")
@@ -78,17 +75,12 @@ SUBGROUP_KEYBOARD = InlineKeyboardMarkup([
     ]
 ])
 
-
-
-
-# Клавиатура, которая показывается под расписанием (с кнопкой "Назад")
+# Клавиатура под расписанием (с кнопкой "Назад")
 SCHEDULE_KEYBOARD = InlineKeyboardMarkup([
     [
         InlineKeyboardButton("◀️ Главное меню", callback_data="main_menu"),
     ]
 ])
-
-
 
 
 def get_welcome_text(user_name: str, subgroup: int = None) -> str:
@@ -100,7 +92,6 @@ def get_welcome_text(user_name: str, subgroup: int = None) -> str:
         f"👥 Группа: `{DEFAULT_GROUP}`{subgroup_str}\n\n"
         f"Выбери нужный раздел в меню ниже 👇"
     )
-
 
 
 async def start_command(
@@ -129,7 +120,7 @@ async def start_command(
 
 
 async def handle_callback(
-        update: Update, context: ContextTypes.DEFAULT_TYPE
+    update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Обработчик нажатий на Inline-кнопки с бесшовной сменой баннера и текста."""
     query = update.callback_query
@@ -223,7 +214,7 @@ async def handle_callback(
             target = today + timedelta(days=1)
             text = get_schedule_for_date(DEFAULT_GROUP, target, subgroup=subgroup)
             banner_key = "tomorrow"
-        elif data == "week_current":
+        elif data in ("week_current", "week"):
             text = get_schedule_for_week(DEFAULT_GROUP, next_week=False, subgroup=subgroup)
             banner_key = "week"
         else:
@@ -232,22 +223,30 @@ async def handle_callback(
 
         reply_markup = SCHEDULE_KEYBOARD
 
-    # Ограничение длины caption для фото в Telegram (макс 1024 символа)
-    if len(text) > 1020:
-        text = text[:1015] + "..."
+    # Безопасное ограничение длины подписи (Telegram лимит 1024 символа для caption)
+    if len(text) > 1000:
+        text = text[:950].rsplit("\n", 1)[0] + "\n\n*(показана часть расписания)*"
 
-    # Обновляем фото и подпись одним действием
+    photo_path = BANNERS.get(banner_key, BANNERS["main"])
+
+    # Обновляем медиа и текст
     try:
-        photo_path = BANNERS.get(banner_key, BANNERS["main"])
         with open(photo_path, "rb") as photo:
             await query.edit_message_media(
                 media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
                 reply_markup=reply_markup,
             )
     except BadRequest as e:
-        # Игнорируем ошибку, если пользователь нажал кнопку, не изменившую контент
-        if "Message is not modified" not in str(e):
-            raise e
+        error_msg = str(e)
+        # Если Telegram ругается на Markdown из-за обрезки — шлем чистым текстом
+        if "Can't parse entities" in error_msg:
+            with open(photo_path, "rb") as photo:
+                await query.edit_message_media(
+                    media=InputMediaPhoto(media=photo, caption=text),
+                    reply_markup=reply_markup,
+                )
+        elif "Message is not modified" not in error_msg:
+            print(f"Ошибка при смене баннера: {e}")
 
 
 async def handle_user_text(
@@ -257,7 +256,7 @@ async def handle_user_text(
     user_input = update.message.text.strip()
     chat_id = update.effective_chat.id
 
-    # --- 1. ОБРАБОТКА ОТЗЫВА ---
+    # 1. ОБРАБОТКА ОТЗЫВА
     if context.user_data.get("waiting_for_feedback"):
         try:
             await update.message.delete()
@@ -303,7 +302,7 @@ async def handle_user_text(
                 pass
         return
 
-    # --- 2. ОБРАБОТКА ДАТЫ ---
+    # 2. ОБРАБОТКА ДАТЫ
     if context.user_data.get("waiting_for_date"):
         try:
             await update.message.delete()
@@ -321,8 +320,8 @@ async def handle_user_text(
             schedule_text = get_schedule_for_date(DEFAULT_GROUP, target_date, subgroup=subgroup)
             context.user_data["waiting_for_date"] = False
 
-            if len(schedule_text) > 1020:
-                schedule_text = schedule_text[:1015] + "..."
+            if len(schedule_text) > 1000:
+                schedule_text = schedule_text[:950].rsplit("\n", 1)[0] + "\n\n*(показана часть)*"
 
             if menu_id:
                 try:
@@ -355,20 +354,10 @@ async def handle_user_text(
                     pass
             return
 
-    # Если пользователь просто прислал левый текст — удаляем, чтобы не мусорить
     try:
         await update.message.delete()
     except Exception:
         pass
-
-
-
-
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
 
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -378,16 +367,13 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"OK")
 
     def log_message(self, format, *args):
-        # Заглушаем постоянные логи проверок от Render, чтобы не спамить в консоль
         return
 
 
 def run_fake_server():
-    # Render передает нужный порт в переменной окружения PORT, по умолчанию берем 10000
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
-
 
 
 def main() -> None:
@@ -402,7 +388,6 @@ def main() -> None:
 
     print("✅ Бот успешно запущен и ожидает сообщений!")
     app.run_polling()
-
 
 
 if __name__ == '__main__':
