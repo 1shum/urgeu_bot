@@ -423,6 +423,9 @@ async def handle_callback(
         notifs = load_notifications()
         chosen = data.replace("set_notif_", "")
 
+        users = load_json(USERS_FILE)
+        current_subgroup = subgroup or users.get(str(chat_id), {}).get("subgroup")
+
         if chosen == "off":
             if str(chat_id) in notifs:
                 notifs[str(chat_id)]["enabled"] = False
@@ -436,7 +439,7 @@ async def handle_callback(
             notifs[str(chat_id)] = {
                 "enabled": True,
                 "time": chosen,
-                "subgroup": subgroup,
+                "subgroup": current_subgroup,
             }
             save_notifications(notifs)
             text = (
@@ -513,9 +516,17 @@ async def handle_callback(
         context.user_data["subgroup"] = val
         subgroup = val
 
+        # Сохраняем подгруппу в базу пользователей (для личного кабинета)
+        users = load_json(USERS_FILE)
+        uid = str(chat_id)
+        if uid in users:
+            users[uid]["subgroup"] = val
+            save_json(USERS_FILE, users)
+
+        # Сохраняем в уведомления
         notifs = load_notifications()
-        if str(chat_id) in notifs:
-            notifs[str(chat_id)]["subgroup"] = val
+        if uid in notifs:
+            notifs[uid]["subgroup"] = val
             save_notifications(notifs)
 
         user_name = query.from_user.first_name
