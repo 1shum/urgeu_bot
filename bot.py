@@ -417,7 +417,12 @@ async def handle_callback(
             "Выберите удобное время:"
         )
         reply_markup = get_notif_keyboard(saved_time if is_enabled else None)
-        banner_key = "main"
+        with open(BANNERS["main"], "rb") as photo:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
+                reply_markup=reply_markup,
+            )
+        return
 
     elif data.startswith("set_notif_"):
         notifs = load_notifications()
@@ -448,7 +453,12 @@ async def handle_callback(
             )
             reply_markup = get_notif_keyboard(chosen)
 
-        banner_key = "main"
+        with open(BANNERS["main"], "rb") as photo:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
+                reply_markup=reply_markup,
+            )
+        return
 
     # 4. Главное меню
         # Личный кабинет
