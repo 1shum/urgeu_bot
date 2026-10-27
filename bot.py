@@ -207,7 +207,10 @@ async def handle_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except BadRequest:
+        pass
 
     data = query.data
     chat_id = query.message.chat_id
