@@ -97,26 +97,56 @@ def get_schedule_for_date(group: str, target_date: datetime, subgroup: int | Non
     return format_day_schedule(data[0], group, subgroup)
 
 
-def get_schedule_for_week(group: str, next_week: bool = False, subgroup: int | None = None) -> str:
-    today = datetime.now()
-    if next_week:
-        today += timedelta(days=7)
+def format_pair(pair: dict) -> str:
+    """Лаконичный вывод одной пары: время, название, аудитория/тип."""
+    time_str = pair.get("time", "")
+    subject = pair.get("subject", "").strip()
+    room = pair.get("room", "").strip()
+    pair_type = pair.get("type", "").strip()
 
-    monday = today - timedelta(days=today.weekday())
-    saturday = monday + timedelta(days=5)
+    details = []
+    if pair_type:
+        details.append(pair_type)
+    if room:
+        details.append(f"ауд. {room}")
 
-    data = fetch_raw_schedule(
-        group, monday.strftime("%d.%m.%Y"), saturday.strftime("%d.%m.%Y")
-    )
-    if not data:
-        return "⚠️ Не удалось загрузить расписание на неделю."
+    extra = f" ({', '.join(details)})" if details else ""
+    return f"`{time_str}` **{subject}**{extra}"
 
-    week_label = "следующую" if next_week else "текущую"
-    result = [f"🗓 *Расписание на {week_label} неделю*\n"]
 
-    for day in data:
-        result.append(format_day_schedule(day, group, subgroup))
-        result.append("")
+def get_schedule_for_week(
+    group: str, next_week: bool = False, subgroup: int = None
+) -> str:
+    """Компактное расписание на неделю без лишних эмодзи и шума."""
+    schedule_data = get_week_data(
+        group, next_week=next_week
+    )  # твоя функция получения данных недели
+    if not schedule_data:
+        return "Расписание на эту неделю отсутствует."
 
-    return "\n".join(result)
+    lines = ["🗓 **РАСПИСАНИЕ НА НЕДЕЛЮ**", "—" * 15]
+
+    for day in schedule_data:
+        day_title = day.get("day_name", "").upper()
+        date_str = day.get("date", "")
+        pairs = day.get("pairs", [])
+
+        # Фильтр по подгруппе, если задана
+        if subgroup:
+            pairs = [
+                p
+                for p in pairs
+                if not p.get("subgroup") or p.get("subgroup") == subgroup
+            ]
+
+        lines.append(f"\n*{day_title}* (`{date_str}`)")
+
+        if not pairs:
+            lines.append("  Пар нет")
+            continue
+
+        for p in pairs:
+            lines.append(f"• {format_pair(p)}")
+
+    return "\n".join(lines)
 

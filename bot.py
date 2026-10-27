@@ -79,14 +79,16 @@ SCHEDULE_KEYBOARD = InlineKeyboardMarkup([
 ])
 
 def get_welcome_text(user_name: str, subgroup: int = None) -> str:
-    """Формирует текст главного экрана меню с учетом подгруппы."""
-    subgroup_str = f" (Подгруппа {subgroup})" if subgroup else ""
+    """Формирует строгий и акцентный текст главного меню."""
+    subgroup_tag = f" `[Подгруппа {subgroup}]`" if subgroup else ""
     return (
-        f"👋 Привет, {user_name}!\n\n"
-        f"🏛 **Бот расписания УрГЭУ**\n"
-        f"👥 Группа: `{DEFAULT_GROUP}`{subgroup_str}\n\n"
-        f"Выбери нужный раздел в меню ниже 👇"
+        f"👋 Рады видеть, *{user_name}*!\n\n"
+        f"🏛 **УрГЭУ | РАСПИСАНИЕ**\n"
+        f"📚 Группа: `{DEFAULT_GROUP}`{subgroup_tag}\n"
+        f"────────────────────\n"
+        f"Выберите действие в меню:"
     )
+
 
 async def start_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -130,16 +132,29 @@ async def handle_callback(
         reply_markup = get_main_keyboard(subgroup)
         banner_key = "main"
 
+
     elif data == "choose_subgroup":
+
         context.user_data["waiting_for_date"] = False
+
         context.user_data["waiting_for_feedback"] = False
+
         text = (
-            "👥 **Выбор подгруппы**\n\n"
-            "Выберите вашу подгруппу (1 или 2).\n"
-            "После этого бот будет показывать только ваши пары:"
+
+            "👥 **ВЫБОР ПОДГРУППЫ**\n"
+
+            "────────────────────\n"
+
+            "Укажите номер вашей подгруппы (1 или 2).\n"
+
+            "В расписании останутся только релевантные пары."
+
         )
+
         reply_markup = SUBGROUP_KEYBOARD
+
         banner_key = "subgroup"
+
 
     elif data == "set_subgroup_1":
         context.user_data["subgroup"] = 1
