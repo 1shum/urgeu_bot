@@ -30,7 +30,7 @@ from telegram.ext import (
 
 BOT_TOKEN = "8970456575:AAFUoFW-hT0pcNJE0mfE3Xzx_Wq9-pkFU40"
 DEFAULT_GROUP = "ПИЭ-26-2"
-ADMIN_ID = 1087118817
+ADMIN_IDS = 1087118817
 TIMEZONE = ZoneInfo("Asia/Yekaterinburg")
 NOTIF_FILE = "notifications.json"
 USERS_FILE = "users.json"
