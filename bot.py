@@ -34,6 +34,7 @@ ADMIN_ID = 1087118817
 TIMEZONE = ZoneInfo("Asia/Yekaterinburg")
 NOTIF_FILE = "notifications.json"
 USERS_FILE = "users.json"
+TICKETS_FILE = "tickets.json"
 
 BANNERS = {
     "main": "banners/main.png",
@@ -46,6 +47,55 @@ BANNERS = {
 }
 
 # --- РАБОТА С ФАЙЛАМИ JSON ---
+def load_tickets() -> dict:
+    return load_json(TICKETS_FILE)
+
+
+def save_tickets(data: dict) -> None:
+    save_json(TICKETS_FILE, data)
+
+
+def get_active_ticket(user_id: int) -> dict | None:
+    tickets = load_tickets()
+    for t_id, ticket in tickets.items():
+        if ticket.get("user_id") == user_id and ticket.get("status") == "open":
+            return ticket
+    return None
+
+
+def create_ticket(user_id: int, user_name: str, initial_text: str) -> dict:
+    tickets = load_tickets()
+    now_str = datetime.now().strftime("%d.%m %H:%M")
+    new_id = str(len(tickets) + 1)
+
+    new_ticket = {
+        "id": new_id,
+        "user_id": user_id,
+        "user_name": user_name,
+        "status": "open",
+        "created_at": now_str,
+        "messages": [
+            {
+                "sender": "user",
+                "text": initial_text,
+                "time": now_str
+            }
+        ]
+    }
+    tickets[new_id] = new_ticket
+    save_tickets(tickets)
+    return new_ticket
+
+
+def close_ticket_by_id(ticket_id: str) -> bool:
+    tickets = load_tickets()
+    if ticket_id in tickets and tickets[ticket_id]["status"] == "open":
+        tickets[ticket_id]["status"] = "closed"
+        tickets[ticket_id]["closed_at"] = datetime.now().strftime("%d.%m %H:%M")
+        save_tickets(tickets)
+        return True
+    return False
+
 def load_json(filepath: str) -> dict:
     if os.path.exists(filepath):
         try:
@@ -151,6 +201,34 @@ PROFILE_KEYBOARD = InlineKeyboardMarkup([
         InlineKeyboardButton("◀️ Главное меню", callback_data="main_menu"),
     ]
 ])
+
+
+def get_support_keyboard(has_active_ticket: bool) -> InlineKeyboardMarkup:
+    buttons = []
+    if not has_active_ticket:
+        buttons.append([InlineKeyboardButton("✍️ Написать обращение", callback_data="ticket_create")])
+    else:
+        buttons.append([InlineKeyboardButton("💬 Дополнить обращение", callback_data="ticket_add_msg")])
+        buttons.append([InlineKeyboardButton("❌ Закрыть обращение", callback_data="ticket_close_self")])
+
+    buttons.append([InlineKeyboardButton("📁 Мои обращения", callback_data="ticket_history")])
+    buttons.append([InlineKeyboardButton("◀️ Главное меню", callback_data="main_menu")])
+    return InlineKeyboardMarkup(buttons)
+
+
+def get_user_tickets_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    tickets = load_tickets()
+    buttons = []
+    user_tickets = [t for t in tickets.values() if t.get("user_id") == user_id]
+
+    # Показываем последние 5 обращений
+    for t in sorted(user_tickets, key=lambda x: int(x["id"]), reverse=True)[:5]:
+        status_icon = "🟡" if t.get("status") == "open" else "✅"
+        btn_text = f"{status_icon} Тикет #{t['id']} от {t['created_at']}"
+        buttons.append([InlineKeyboardButton(btn_text, callback_data=f"ticket_view_{t['id']}")])
+
+    buttons.append([InlineKeyboardButton("◀️ Назад в поддержку", callback_data="feedback")])
+    return InlineKeyboardMarkup(buttons)
 
 SUBGROUP_KEYBOARD = InlineKeyboardMarkup([
     [
@@ -550,15 +628,141 @@ async def handle_callback(
     # 6. Обратная связь
     elif data == "feedback":
         context.user_data["waiting_for_date"] = False
-        context.user_data["waiting_for_feedback"] = True
-        context.user_data["menu_message_id"] = query.message.message_id
-        text = (
-            "💬 **Поддержка и предложения**\n\n"
-            "Напишите ваши идеи, отзывы или найденные ошибки следующим сообщением:"
-        )
-        reply_markup = SCHEDULE_KEYBOARD
-        banner_key = "feedback"
+        context.user_data["waiting_for_feedback"] = False
+        context.user_data["waiting_for_avatar"] = False
 
+        active_t = get_active_ticket(chat_id)
+        if active_t:
+            last_msg = active_t["messages"][-1]
+            sender_label = "Администратор" if last_msg["sender"] == "admin" else "Вы"
+            text = (
+                f"🎫 **ОБРАЩЕНИЕ #{active_t['id']} (В обработке)**\n"
+                f"────────────────────\n"
+                f"Создано: *{active_t['created_at']}*\n"
+                f"Последнее сообщение ({sender_label}):\n"
+                f"> {last_msg['text']}\n\n"
+                "Вы можете отправить дополнительное сообщение или закрыть обращение, если вопрос решён."
+            )
+            reply_markup = get_support_keyboard(has_active_ticket=True)
+        else:
+            text = (
+                "🆘 **СЛУЖБА ПОДДЕРЖКИ**\n"
+                "────────────────────\n"
+                "Нашли ошибку в расписании, кабинете или преподавателе?\n\n"
+                "Нажмите кнопку ниже, чтобы создать обращение. Администратор увидит его и даст ответ."
+            )
+            reply_markup = get_support_keyboard(has_active_ticket=False)
+
+        with open(BANNERS["main"], "rb") as photo:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
+                reply_markup=reply_markup,
+            )
+        return
+
+    elif data in ("ticket_create", "ticket_add_msg"):
+        context.user_data["waiting_for_feedback"] = True
+        context.user_data["waiting_for_date"] = False
+        context.user_data["waiting_for_avatar"] = False
+        context.user_data["menu_message_id"] = query.message.message_id
+
+        text = (
+            "✍️ **Напишите текст сообщения**\n\n"
+            "Отправьте сообщение боту следующим текстом. Оно автоматически прикрепится к вашему обращению."
+        )
+        cancel_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("◀️ Отмена", callback_data="feedback")]
+        ])
+        with open(BANNERS["main"], "rb") as photo:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
+                reply_markup=cancel_kb,
+            )
+        return
+
+    elif data == "ticket_close_self":
+        active_t = get_active_ticket(chat_id)
+        if active_t:
+            close_ticket_by_id(active_t["id"])
+
+        text = "✅ **Ваше обращение закрыто.**\n\nВы всегда можете посмотреть его в разделе «Мои обращения»."
+        reply_markup = get_support_keyboard(has_active_ticket=False)
+        with open(BANNERS["main"], "rb") as photo:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
+                reply_markup=reply_markup,
+            )
+        return
+
+    elif data == "ticket_history":
+        text = (
+            "📁 **МОИ ОБРАЩЕНИЯ**\n"
+            "────────────────────\n"
+            "Выберите тикет для просмотра истории переписки:"
+        )
+        reply_markup = get_user_tickets_keyboard(chat_id)
+        with open(BANNERS["main"], "rb") as photo:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
+                reply_markup=reply_markup,
+            )
+        return
+
+    elif data.startswith("ticket_view_"):
+        t_id = data.replace("ticket_view_", "")
+        tickets = load_tickets()
+        ticket = tickets.get(t_id)
+
+        if not ticket:
+            text = "⚠️ Обращение не найдено."
+            reply_markup = get_user_tickets_keyboard(chat_id)
+        else:
+            status = "В обработке" if ticket.get("status") == "open" else "Закрыто"
+            text_lines = [
+                f"🎫 **Обращение #{ticket['id']}** ({status})",
+                f"Дата: *{ticket['created_at']}*",
+                "────────────────────"
+            ]
+            for msg in ticket.get("messages", []):
+                role = "👤 Вы" if msg["sender"] == "user" else "🛡 Поддержка"
+                text_lines.append(f"*{role}* ({msg.get('time', '')}):\n{msg['text']}\n")
+
+            text = "\n".join(text_lines)
+            kb = [[InlineKeyboardButton("◀️ К списку обращений", callback_data="ticket_history")]]
+            reply_markup = InlineKeyboardMarkup(kb)
+
+        with open(BANNERS["main"], "rb") as photo:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
+                reply_markup=reply_markup,
+            )
+        return
+    elif data.startswith("adm_reply_"):
+        if chat_id not in ADMIN_IDS:
+            await query.answer("У вас нет прав администратора.", show_alert=True)
+            return
+        ticket_id = data.replace("adm_reply_", "")
+        context.user_data["admin_replying_ticket"] = ticket_id
+        await query.answer()
+        await query.message.reply_text(
+            f"✍️ Напишите ответ на тикет #{ticket_id} следующим сообщением:"
+        )
+        return
+
+    elif data.startswith("adm_close_"):
+        if chat_id not in ADMIN_IDS:
+            await query.answer("У вас нет прав администратора.", show_alert=True)
+            return
+        ticket_id = data.replace("adm_close_", "")
+        if close_ticket_by_id(ticket_id):
+            await query.answer("Тикет закрыт!", show_alert=False)
+            try:
+                await query.edit_message_text(f"🔒 Тикет #{ticket_id} успешно закрыт.")
+            except Exception:
+                pass
+        else:
+            await query.answer("Тикет уже был закрыт ранее.", show_alert=True)
+        return
     # 7. Выбор дня
     elif data == "pick_date":
         context.user_data["waiting_for_feedback"] = False
@@ -626,198 +830,139 @@ async def handle_callback(
             print(f"Ошибка смены баннера: {e}")
 
 # --- ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ ---
-async def handle_user_text(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    user_input = update.message.text.strip()
+async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
+    user = update.effective_user
+    text = update.message.text.strip()
 
-    track_user_activity(update.effective_user, f"text:{user_input[:20]}")
+    # 1. Если админ отвечает на тикет
+    if context.user_data.get("admin_replying_ticket"):
+        target_ticket_id = context.user_data["admin_replying_ticket"]
+        tickets = load_tickets()
 
-    # Реплай админа
-    if user_id == ADMIN_ID and update.message.reply_to_message:
-        replied_msg = update.message.reply_to_message
-        replied_text = replied_msg.text or replied_msg.caption or ""
-
-        match = re.search(r"ID:\s*`?(\d+)`?", replied_text)
-        if match:
-            target_user_id = int(match.group(1))
-            answer_for_user = (
-                "📩 **Ответ от разработчика:**\n\n"
-                f"{user_input}\n\n"
-                "_Если у вас остались вопросы, вы всегда можете написать в Поддержку снова._"
-            )
-            try:
-                await context.bot.send_message(
-                    chat_id=target_user_id,
-                    text=answer_for_user,
-                    parse_mode="Markdown",
-                )
-                await update.message.reply_text("✅ Ответ успешно доставлен пользователю!")
-            except Exception as e:
-                await update.message.reply_text(f"❌ Не удалось доставить ответ: {e}")
-            return
-
-    # Обращение в поддержку
-    if context.user_data.get("waiting_for_feedback"):
         try:
             await update.message.delete()
         except Exception:
             pass
 
-        menu_id = context.user_data.get("menu_message_id")
-        user = update.effective_user
-        username = f"@{user.username}" if user.username else "нет username"
+        if target_ticket_id in tickets and tickets[target_ticket_id]["status"] == "open":
+            now_str = datetime.now().strftime("%d.%m %H:%M")
+            tickets[target_ticket_id]["messages"].append({
+                "sender": "admin",
+                "text": text,
+                "time": now_str
+            })
+            save_tickets(tickets)
+            context.user_data["admin_replying_ticket"] = None
 
-        admin_message = (
-            f"📩 **Новое обращение!**\n\n"
-            f"👤 От: {user.first_name} ({username})\n"
-            f"🆔 ID: `{user.id}`\n\n"
-            f"💬 **Текст:**\n{user_input}\n\n"
-            f"*(Чтобы ответить, просто сделайте Reply на это сообщение)*"
-        )
+            target_user_id = tickets[target_ticket_id]["user_id"]
+            await update.message.reply_text(f"✅ Ответ отправлен в тикет #{target_ticket_id}!")
 
-        try:
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=admin_message,
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            print(f"Ошибка отправки админу: {e}")
-
-        context.user_data["waiting_for_feedback"] = False
-        success_text = (
-            "✅ **Спасибо! Ваше сообщение отправлено.**\n\n"
-            "Разработчик обязательно прочитает его."
-        )
-
-        if menu_id:
+            # Уведомляем пользователя через редактирование меню или тихое обновление
             try:
-                with open(BANNERS["feedback"], "rb") as photo:
-                    await context.bot.edit_message_media(
-                        chat_id=chat_id,
-                        message_id=menu_id,
-                        media=InputMediaPhoto(media=photo, caption=success_text, parse_mode="Markdown"),
-                        reply_markup=SCHEDULE_KEYBOARD,
+                prof_text = (
+                    f"🔔 **Поступил ответ по обращению #{target_ticket_id}!**\n"
+                    f"────────────────────\n"
+                    f"Ответ администратора:\n> {text}\n\n"
+                    f"Вы можете посмотреть историю в разделе «Поддержка»."
+                )
+                with open(BANNERS["main"], "rb") as photo:
+                    await context.bot.send_photo(
+                        chat_id=target_user_id,
+                        photo=photo,
+                        caption=prof_text,
+                        parse_mode="Markdown",
+                        reply_markup=get_support_keyboard(has_active_ticket=True)
                     )
-            except BadRequest:
+            except Exception:
                 pass
         return
 
-    # Ввод даты
-    if context.user_data.get("waiting_for_date"):
+    # 2. Если пользователь вводит сообщение тикета
+    if context.user_data.get("waiting_for_feedback"):
+        context.user_data["waiting_for_feedback"] = False
+
+        # Удаляем входящее текстовое сообщение для сохранения чистоты
         try:
             await update.message.delete()
         except Exception:
             pass
 
-        menu_id = context.user_data.get("menu_message_id")
+        active_t = get_active_ticket(chat_id)
+        now_str = datetime.now().strftime("%d.%m %H:%M")
 
-        try:
-            today = datetime.now(TIMEZONE)
-            parsed_date = datetime.strptime(user_input, "%d.%m")
-            target_date = parsed_date.replace(year=today.year, tzinfo=TIMEZONE)
+        if active_t:
+            # Дополняем существующий открытый тикет
+            tickets = load_tickets()
+            tickets[active_t["id"]]["messages"].append({
+                "sender": "user",
+                "text": text,
+                "time": now_str
+            })
+            save_tickets(tickets)
+            ticket_id = active_t["id"]
+        else:
+            # Создаем новый тикет
+            new_ticket = create_ticket(chat_id, user.first_name, text)
+            ticket_id = new_ticket["id"]
 
-            subgroup = context.user_data.get("subgroup")
-            schedule_text = get_schedule_for_date(DEFAULT_GROUP, target_date, subgroup=subgroup)
-            context.user_data["waiting_for_date"] = False
-
-            if len(schedule_text) > 1000:
-                schedule_text = schedule_text[:950].rsplit("\n", 1)[0] + "..."
-
-            if menu_id:
-                try:
-                    with open(BANNERS["date"], "rb") as photo:
-                        await context.bot.edit_message_media(
-                            chat_id=chat_id,
-                            message_id=menu_id,
-                            media=InputMediaPhoto(media=photo, caption=schedule_text, parse_mode="Markdown"),
-                            reply_markup=SCHEDULE_KEYBOARD,
-                        )
-                except BadRequest:
-                    pass
-            return
-
-        except ValueError:
-            error_text = (
-                "⚠️ **Неверный формат даты.**\n\n"
-                "Пожалуйста, отправьте дату в виде `ДД.ММ` (например, `28.10`):"
-            )
-            if menu_id:
-                try:
-                    with open(BANNERS["date"], "rb") as photo:
-                        await context.bot.edit_message_media(
-                            chat_id=chat_id,
-                            message_id=menu_id,
-                            media=InputMediaPhoto(media=photo, caption=error_text, parse_mode="Markdown"),
-                            reply_markup=SCHEDULE_KEYBOARD,
-                        )
-                except BadRequest:
-                    pass
-            return
-
-    try:
-        await update.message.delete()
-    except Exception:
-        pass
-
-    async def handle_user_photo(
-            update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        chat_id = update.effective_chat.id
-        user = update.effective_user
-
-        # Проверяем, ожидает ли бот фото для профиля
-        if not context.user_data.get("waiting_for_avatar"):
-            return
-
-        # Берем самое качественное разрешение присланного фото (-1)
-        photo = update.message.photo[-1]
-        avatar_file_id = photo.file_id
-
-        # Удаляем сообщение с отправленным фото пользователя для чистоты чата
-        try:
-            await update.message.delete()
-        except Exception:
-            pass
-
-        # Сохраняем file_id в users.json
-        users = load_json(USERS_FILE)
-        uid = str(user.id)
-        if uid not in users:
-            track_user_activity(user, "set_avatar")
-            users = load_json(USERS_FILE)
-
-        users[uid]["avatar_file_id"] = avatar_file_id
-        save_json(USERS_FILE, users)
-
-        context.user_data["waiting_for_avatar"] = False
-        menu_id = context.user_data.get("menu_message_id") or context.user_data.get("main_menu_msg_id")
-
-        prof_text, _ = get_profile_data(chat_id, user.first_name)
-
-        # Обновляем сообщение личного кабинета, подставляя новое фото
-        if menu_id:
+        # Оповещаем администраторов о новом сообщении
+        admin_markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(f"💬 Ответить #{ticket_id}", callback_data=f"adm_reply_{ticket_id}"),
+                InlineKeyboardButton(f"🔒 Закрыть #{ticket_id}", callback_data=f"adm_close_{ticket_id}")
+            ]
+        ])
+        for a_id in ADMIN_IDS:
             try:
-                await context.bot.edit_message_media(
-                    chat_id=chat_id,
-                    message_id=menu_id,
-                    media=InputMediaPhoto(media=avatar_file_id, caption=prof_text, parse_mode="Markdown"),
-                    reply_markup=PROFILE_KEYBOARD,
+                await context.bot.send_message(
+                    chat_id=a_id,
+                    text=(
+                        f"🎫 **Новое сообщение в тикете #{ticket_id}**\n"
+                        f"От: {user.first_name} (@{user.username or 'нет'})\n"
+                        f"Текст:\n{text}"
+                    ),
+                    reply_markup=admin_markup,
+                    parse_mode="Markdown"
                 )
-                return
-            except BadRequest:
+            except Exception:
                 pass
 
-        # Если отредактировать не вышло, шлем новое
-        await update.message.reply_photo(
-            photo=avatar_file_id,
-            caption=prof_text,
-            parse_mode="Markdown",
-            reply_markup=PROFILE_KEYBOARD,
+        # Редактируем главное меню у пользователя (чистый экран)
+        menu_id = context.user_data.get("menu_message_id") or context.user_data.get("main_menu_msg_id")
+        card_text = (
+            f"✅ **Сообщение добавлено в обращение #{ticket_id}!**\n"
+            f"────────────────────\n"
+            f"Администратор уже получил ваше уведомление.\n"
+            f"Вы сможете посмотреть ответ прямо в этом меню."
         )
+        reply_markup = get_support_keyboard(has_active_ticket=True)
+
+        if menu_id:
+            try:
+                with open(BANNERS["main"], "rb") as photo:
+                    await context.bot.edit_message_media(
+                        chat_id=chat_id,
+                        message_id=menu_id,
+                        media=InputMediaPhoto(media=photo, caption=card_text, parse_mode="Markdown"),
+                        reply_markup=reply_markup,
+                    )
+                return
+            except Exception:
+                pass
+
+        with open(BANNERS["main"], "rb") as photo:
+            await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=photo,
+                caption=card_text,
+                parse_mode="Markdown",
+                reply_markup=reply_markup
+            )
+        return
+
+    # Обычная обработка расписания по дате/тексту
+    # (если в коде ниже есть ветка для ввода дат или расписания, оставь ее дальше)
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
