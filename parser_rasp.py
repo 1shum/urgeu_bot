@@ -158,4 +158,65 @@ def get_schedule_for_week(
 
     return "\n".join(lines)
 
+def get_short_schedule_for_date(
+    group: str, target_date: datetime, subgroup: int | None = None
+) -> str:
+    """Генерирует ультракороткую сводку расписания для пуш-уведомлений."""
+    date_str = target_date.strftime("%d.%m.%Y")
+    data = fetch_raw_schedule(group, date_str, date_str)
+
+    if not data or not data[0].get("pairs"):
+        return f"🔔 Завтра ({target_date.strftime('%d.%m')}): пар нет! Отдыхай 🎉"
+
+    day_data = data[0]
+    pairs = day_data.get("pairs", [])
+
+    valid_pairs = []
+    first_time = None
+    last_time = None
+
+    for pair in pairs:
+        sub_pairs = pair.get("schedulePairs", [])
+        filtered = []
+        for item in sub_pairs:
+            item_group = item.get("group", "")
+            if subgroup == 1 and (
+                "(2" in item_group or "2 подгр" in item_group.lower()
+            ):
+                continue
+            if subgroup == 2 and (
+                "(1" in item_group or "1 подгр" in item_group.lower()
+            ):
+                continue
+            filtered.append(item)
+
+        if filtered:
+            subject = filtered[0].get("subject", "").strip()
+            # Укорачиваем длинные названия предметов при необходимости
+            if len(subject) > 28:
+                subject = subject[:25] + "..."
+            valid_pairs.append(subject)
+
+            time_range = pair.get("time", "")
+            if "-" in time_range:
+                start_p, end_p = [t.strip() for t in time_range.split("-")]
+                if not first_time:
+                    first_time = start_p
+                last_time = end_p
+
+    if not valid_pairs:
+        return f"🔔 Завтра ({target_date.strftime('%d.%m')}): пар нет! Отдыхай 🎉"
+
+    date_short = target_date.strftime("%d.%m")
+    lines = [f"🔔 *Завтра ({date_short})* — *{len(valid_pairs)} пар(ы):*"]
+
+    for i, subj in enumerate(valid_pairs, 1):
+        lines.append(f"{i}. {subj}")
+
+    if first_time and last_time:
+        lines.append(f"⏰ `{first_time} – {last_time}`")
+
+    return "\n".join(lines)
+
+
 
