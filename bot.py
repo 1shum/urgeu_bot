@@ -2,6 +2,7 @@ import json
 import os
 import re
 import threading
+from portal import check_portal_auth, get_portal_rating, encrypt_password, decrypt_password
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from zoneinfo import ZoneInfo
@@ -189,19 +190,32 @@ def get_notif_keyboard(current_time: str = None) -> InlineKeyboardMarkup:
         ]
     ])
 
-
-PROFILE_KEYBOARD = InlineKeyboardMarkup([
-    [
-        InlineKeyboardButton("📸 Сменить фото профиля", callback_data="profile_change_photo"),
-    ],
-    [
-        InlineKeyboardButton("👥 Подгруппа", callback_data="choose_subgroup"),
-        InlineKeyboardButton("🔔 Уведомления", callback_data="notif_menu"),
-    ],
-    [
-        InlineKeyboardButton("◀️ Главное меню", callback_data="main_menu"),
+def get_profile_keyboard(is_portal_linked: bool = False) -> InlineKeyboardMarkup:
+    buttons = [
+        [
+            InlineKeyboardButton("📷 Сменить фото профиля", callback_data="profile_change_photo")
+        ],
+        [
+            InlineKeyboardButton("👥 Подгруппа", callback_data="choose_subgroup"),
+            InlineKeyboardButton("🔔 Уведомления", callback_data="notif_menu")
+        ]
     ]
-])
+
+    # Кнопки портала УрГЭУ
+    if is_portal_linked:
+        buttons.append([
+            InlineKeyboardButton("📊 Мой рейтинг", callback_data="portal_rating"),
+            InlineKeyboardButton("❌ Отвязать портал", callback_data="portal_unbind")
+        ])
+    else:
+        buttons.append([
+            InlineKeyboardButton("🔗 Привязать портал УрГЭУ", callback_data="portal_bind")
+        ])
+
+    buttons.append([
+        InlineKeyboardButton("◀️ Главное меню", callback_data="main_menu")
+    ])
+    return InlineKeyboardMarkup(buttons)
 
 
 def get_support_keyboard(has_active_ticket: bool) -> InlineKeyboardMarkup:
@@ -545,14 +559,20 @@ async def handle_callback(
         context.user_data["waiting_for_date"] = False
         context.user_data["waiting_for_feedback"] = False
         context.user_data["waiting_for_avatar"] = False
+        context.user_data["waiting_for_portal_login"] = False
+        context.user_data["waiting_for_portal_password"] = False
 
         prof_text, avatar_id = get_profile_data(chat_id, query.from_user.first_name)
+
+        # Проверяем, привязан ли портал у пользователя
+        is_linked = bool(context.user_data.get("portal_login") and context.user_data.get("portal_password"))
+        reply_markup = get_profile_keyboard(is_linked)
 
         if avatar_id:
             try:
                 await query.edit_message_media(
                     media=InputMediaPhoto(media=avatar_id, caption=prof_text, parse_mode="Markdown"),
-                    reply_markup=PROFILE_KEYBOARD,
+                    reply_markup=reply_markup,
                 )
                 return
             except BadRequest:
@@ -561,8 +581,61 @@ async def handle_callback(
         with open(BANNERS["main"], "rb") as photo:
             await query.edit_message_media(
                 media=InputMediaPhoto(media=photo, caption=prof_text, parse_mode="Markdown"),
-                reply_markup=PROFILE_KEYBOARD,
+                reply_markup=reply_markup,
             )
+        return
+        # --- БЛОК ПОРТАЛА УРГЭУ ---
+    elif data == "portal_bind":
+        context.user_data["waiting_for_portal_login"] = True
+        context.user_data["waiting_for_portal_password"] = False
+
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Отмена", callback_data="profile_menu")]])
+        await query.message.reply_text(
+            "🎓 *Привязка личного кабинета УрГЭУ*\n\n"
+            "Введи свой *ID пользователя* от портала (например: `m.m.samosadov`):",
+            parse_mode="Markdown",
+            reply_markup=kb
+        )
+        return
+
+    elif data == "portal_unbind":
+        context.user_data.pop("portal_login", None)
+        context.user_data.pop("portal_password", None)
+        await query.answer("Личный кабинет портала успешно отвязан!", show_alert=True)
+
+        prof_text, _ = get_profile_data(chat_id, query.from_user.first_name)
+        await query.edit_message_caption(caption=prof_text, reply_markup=get_profile_keyboard(False),
+                                         parse_mode="Markdown")
+        return
+
+    elif data == "portal_rating":
+        login = context.user_data.get("portal_login")
+        enc_pw = context.user_data.get("portal_password")
+
+        if not login or not enc_pw:
+            await query.answer("Сначала привяжи аккаунт портала!", show_alert=True)
+            return
+
+        status_msg = await query.message.reply_text("⏳ *Подключаюсь к порталу УрГЭУ и считаю баллы...*",
+                                                    parse_mode="Markdown")
+
+        try:
+            raw_password = decrypt_password(enc_pw)
+            success, text = await get_portal_rating(login, raw_password)
+        except Exception as e:
+            success, text = False, f"Ошибка дешифрования данных: {e}"
+
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Обновить", callback_data="portal_rating")],
+            [InlineKeyboardButton("◀️ Назад в профиль", callback_data="profile_menu")]
+        ])
+
+        await status_msg.delete()
+        if success:
+            await query.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+        else:
+            await query.message.reply_text(f"❌ *Ошибка получения рейтинга:*\n{text}", parse_mode="Markdown",
+                                           reply_markup=kb)
         return
 
     elif data == "profile_change_photo":
@@ -880,6 +953,57 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     # 2. Если пользователь вводит сообщение тикета
+        # Ввод логина от портала УрГЭУ
+    if context.user_data.get("waiting_for_portal_login"):
+            login = update.message.text.strip()
+            context.user_data["temp_portal_login"] = login
+            context.user_data["waiting_for_portal_login"] = False
+            context.user_data["waiting_for_portal_password"] = True
+
+            await update.message.reply_text(
+                f"Логин `{login}` принят.\n\nТеперь введи *пароль* от портала:\n"
+                "_(Сообщение с паролем будет сразу же удалено из чата в целях безопасности)_",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Ввод пароля от портала УрГЭУ
+    if context.user_data.get("waiting_for_portal_password"):
+            password = update.message.text.strip()
+            login = context.user_data.get("temp_portal_login")
+
+            # Удаляем сообщение с паролем из чата
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
+
+            check_msg = await update.message.reply_text("⏳ Проверяем данные на портале УрГЭУ...")
+
+            # Проверяем авторизацию через функцию из portal.py
+            success, msg = await check_portal_auth(login, password)
+            await check_msg.delete()
+
+            if success:
+                context.user_data["portal_login"] = login
+                context.user_data["portal_password"] = encrypt_password(password)
+                context.user_data["waiting_for_portal_password"] = False
+                context.user_data.pop("temp_portal_login", None)
+
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📊 Посмотреть рейтинг", callback_data="portal_rating")],
+                    [InlineKeyboardButton("👤 В профиль", callback_data="profile_menu")]
+                ])
+                await update.message.reply_text("✅ *Портал УрГЭУ успешно привязан!*", parse_mode="Markdown",
+                                                reply_markup=kb)
+            else:
+                context.user_data["waiting_for_portal_password"] = False
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Попробовать снова", callback_data="portal_bind")],
+                    [InlineKeyboardButton("◀️ В профиль", callback_data="profile_menu")]
+                ])
+                await update.message.reply_text(f"❌ *Ошибка входа:* {msg}", parse_mode="Markdown", reply_markup=kb)
+            return
     if context.user_data.get("waiting_for_feedback"):
         context.user_data["waiting_for_feedback"] = False
 
