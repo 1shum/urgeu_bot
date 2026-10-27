@@ -32,13 +32,14 @@ def fetch_raw_schedule(
     return None
 
 
-def format_day_schedule(day_data: dict, group_name: str) -> str:
+def format_day_schedule(day_data: dict, group_name: str, subgroup: int | None = None) -> str:
     date_str = day_data.get("date", "")
     weekday = day_data.get("weekDay", "")
 
+    subgroup_header = f" (Подгруппа {subgroup})" if subgroup else ""
     lines = [
         f"📅 *{weekday}* ({date_str})",
-        f"👥 Группа: `{group_name}`",
+        f"👥 Группа: `{group_name}`{subgroup_header}",
         "━━━━━━━━━━━━━━━━━━━━",
     ]
 
@@ -48,13 +49,28 @@ def format_day_schedule(day_data: dict, group_name: str) -> str:
         if not sub_pairs:
             continue
 
+        # Фильтруем пары по подгруппе
+        filtered_sub_pairs = []
+        for item in sub_pairs:
+            item_group = item.get("group", "")
+            # Если выбрана 1-я подгруппа, отсекаем пары 2-й
+            if subgroup == 1 and ("(2" in item_group or "2 подгр" in item_group.lower()):
+                continue
+            # Если выбрана 2-я подгруппа, отсекаем пары 1-й
+            if subgroup == 2 and ("(1" in item_group or "1 подгр" in item_group.lower()):
+                continue
+            filtered_sub_pairs.append(item)
+
+        if not filtered_sub_pairs:
+            continue
+
         has_pairs = True
         num = pair.get("N")
         time_slot = pair.get("time")
 
         lines.append(f"\n*{num} пара* | ⏰ `{time_slot}`")
 
-        for item in sub_pairs:
+        for item in filtered_sub_pairs:
             subj = item.get("subject", "Предмет не указан")
             teacher = item.get("teacher", "Преподаватель не указан")
             aud = item.get("aud", "—")
@@ -71,17 +87,17 @@ def format_day_schedule(day_data: dict, group_name: str) -> str:
     return "\n".join(lines)
 
 
-def get_schedule_for_date(group: str, target_date: datetime) -> str:
+def get_schedule_for_date(group: str, target_date: datetime, subgroup: int | None = None) -> str:
     date_str = target_date.strftime("%d.%m.%Y")
     data = fetch_raw_schedule(group, date_str, date_str)
 
     if not data:
         return f"⚠️ Не удалось загрузить расписание на *{date_str}*."
 
-    return format_day_schedule(data[0], group)
+    return format_day_schedule(data[0], group, subgroup)
 
 
-def get_schedule_for_week(group: str, next_week: bool = False) -> str:
+def get_schedule_for_week(group: str, next_week: bool = False, subgroup: int | None = None) -> str:
     today = datetime.now()
     if next_week:
         today += timedelta(days=7)
@@ -99,7 +115,8 @@ def get_schedule_for_week(group: str, next_week: bool = False) -> str:
     result = [f"🗓 *Расписание на {week_label} неделю*\n"]
 
     for day in data:
-        result.append(format_day_schedule(day, group))
+        result.append(format_day_schedule(day, group, subgroup))
         result.append("")
 
     return "\n".join(result)
+
