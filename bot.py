@@ -103,6 +103,7 @@ def get_main_keyboard(subgroup: int = None) -> InlineKeyboardMarkup:
             InlineKeyboardButton("📆 Выбрать день", callback_data="pick_date"),
         ],
         [
+            InlineKeyboardButton("👤 Личный кабинет", callback_data="profile_menu"),
             InlineKeyboardButton("🔔 Уведомления", callback_data="notif_menu"),
         ],
     ]
@@ -137,6 +138,20 @@ def get_notif_keyboard(current_time: str = None) -> InlineKeyboardMarkup:
         ]
     ])
 
+
+PROFILE_KEYBOARD = InlineKeyboardMarkup([
+    [
+        InlineKeyboardButton("📸 Сменить фото профиля", callback_data="profile_change_photo"),
+    ],
+    [
+        InlineKeyboardButton("👥 Подгруппа", callback_data="choose_subgroup"),
+        InlineKeyboardButton("🔔 Уведомления", callback_data="notif_menu"),
+    ],
+    [
+        InlineKeyboardButton("◀️ Главное меню", callback_data="main_menu"),
+    ]
+])
+
 SUBGROUP_KEYBOARD = InlineKeyboardMarkup([
     [
         InlineKeyboardButton("1️⃣ 1-я подгруппа", callback_data="set_subgroup_1"),
@@ -158,6 +173,45 @@ WEEK_KEYBOARD = InlineKeyboardMarkup([
         InlineKeyboardButton("◀️ Назад в главное меню", callback_data="close_week"),
     ]
 ])
+
+def get_profile_data(user_id: int, first_name: str) -> tuple[str, str | None]:
+    """Возвращает готовый текст профиля и file_id аватарки (если есть)."""
+    users = load_json(USERS_FILE)
+    notifs = load_notifications()
+
+    u_info = users.get(str(user_id), {})
+    n_info = notifs.get(str(user_id), {})
+
+    # Статус подгруппы
+    subgroup = n_info.get("subgroup") or u_info.get("subgroup")
+    subgroup_str = f"{subgroup}-я подгруппа" if subgroup else "не выбрана"
+
+    # Статус уведомлений
+    is_notif = n_info.get("enabled", False)
+    notif_time = n_info.get("time", "—")
+    notif_str = f"🟢 Включены ({notif_time})" if is_notif else "🔴 Выключены"
+
+    # Кабинет учащегося (задел на будущее)
+    lk_status = "🟢 Подключен" if u_info.get("lk_connected") else "⚪ Не подключен *(скоро)*"
+
+    # Счетчик действий
+    actions = u_info.get("actions_count", 1)
+    username = f"@{u_info.get('username', '').lstrip('@')}" if u_info.get("username") else ""
+
+    text = (
+        f"👤 **ЛИЧНЫЙ КАБИНЕТ**\n"
+        f"────────────────────\n"
+        f"Студент: *{first_name}* {username}\n"
+        f"Группа: `{DEFAULT_GROUP}`\n\n"
+        f"👥 **Подгруппа:** {subgroup_str}\n"
+        f"🔔 **Уведомления:** {notif_str}\n"
+        f"🎓 **Кабинет учащегося:** {lk_status}\n"
+        f"⚡ **Всего действий:** `{actions}`\n"
+        f"────────────────────\n"
+        f"_Отправьте фото в чат, чтобы установить или сменить аватарку профиля._"
+    )
+    avatar_file_id = u_info.get("avatar_file_id")
+    return text, avatar_file_id
 
 def get_welcome_text(user_name: str, subgroup: int = None) -> str:
     subgroup_str = f" `[Подгруппа {subgroup}]`" if subgroup else ""
@@ -394,7 +448,49 @@ async def handle_callback(
         banner_key = "main"
 
     # 4. Главное меню
+        # Личный кабинет
+    if data == "profile_menu":
+        context.user_data["waiting_for_date"] = False
+        context.user_data["waiting_for_feedback"] = False
+        context.user_data["waiting_for_avatar"] = False
+
+        prof_text, avatar_id = get_profile_data(chat_id, query.from_user.first_name)
+
+        if avatar_id:
+            try:
+                await query.edit_message_media(
+                    media=InputMediaPhoto(media=avatar_id, caption=prof_text, parse_mode="Markdown"),
+                    reply_markup=PROFILE_KEYBOARD,
+                )
+                return
+            except BadRequest:
+                pass
+
+        with open(BANNERS["main"], "rb") as photo:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=photo, caption=prof_text, parse_mode="Markdown"),
+                reply_markup=PROFILE_KEYBOARD,
+            )
+        return
+
+    elif data == "profile_change_photo":
+        context.user_data["waiting_for_date"] = False
+        context.user_data["waiting_for_feedback"] = False
+        context.user_data["waiting_for_avatar"] = True
+        context.user_data["menu_message_id"] = query.message.message_id
+
+        text = (
+            "📸 **Смена фото профиля**\n\n"
+            "Пришлите мне фотографию следующим сообщением, и она будет установлена в вашем личном кабинете!"
+        )
+        with open(BANNERS["main"], "rb") as photo:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
+                reply_markup=SCHEDULE_KEYBOARD,
+            )
+        return
     elif data == "main_menu":
+        context.user_data["waiting_for_avatar"] = False
         context.user_data["waiting_for_date"] = False
         context.user_data["waiting_for_feedback"] = False
         user_name = query.from_user.first_name
@@ -646,6 +742,62 @@ async def handle_user_text(
     except Exception:
         pass
 
+    async def handle_user_photo(
+            update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        chat_id = update.effective_chat.id
+        user = update.effective_user
+
+        # Проверяем, ожидает ли бот фото для профиля
+        if not context.user_data.get("waiting_for_avatar"):
+            return
+
+        # Берем самое качественное разрешение присланного фото (-1)
+        photo = update.message.photo[-1]
+        avatar_file_id = photo.file_id
+
+        # Удаляем сообщение с отправленным фото пользователя для чистоты чата
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+        # Сохраняем file_id в users.json
+        users = load_json(USERS_FILE)
+        uid = str(user.id)
+        if uid not in users:
+            track_user_activity(user, "set_avatar")
+            users = load_json(USERS_FILE)
+
+        users[uid]["avatar_file_id"] = avatar_file_id
+        save_json(USERS_FILE, users)
+
+        context.user_data["waiting_for_avatar"] = False
+        menu_id = context.user_data.get("menu_message_id") or context.user_data.get("main_menu_msg_id")
+
+        prof_text, _ = get_profile_data(chat_id, user.first_name)
+
+        # Обновляем сообщение личного кабинета, подставляя новое фото
+        if menu_id:
+            try:
+                await context.bot.edit_message_media(
+                    chat_id=chat_id,
+                    message_id=menu_id,
+                    media=InputMediaPhoto(media=avatar_file_id, caption=prof_text, parse_mode="Markdown"),
+                    reply_markup=PROFILE_KEYBOARD,
+                )
+                return
+            except BadRequest:
+                pass
+
+        # Если отредактировать не вышло, шлем новое
+        await update.message.reply_photo(
+            photo=avatar_file_id,
+            caption=prof_text,
+            parse_mode="Markdown",
+            reply_markup=PROFILE_KEYBOARD,
+        )
+
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -660,6 +812,105 @@ def run_fake_server():
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
 
+    async def handle_user_photo(
+            update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        chat_id = update.effective_chat.id
+        user = update.effective_user
+
+        if not context.user_data.get("waiting_for_avatar"):
+            return
+
+        photo = update.message.photo[-1]
+        avatar_file_id = photo.file_id
+
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+        users = load_json(USERS_FILE)
+        uid = str(user.id)
+        if uid not in users:
+            track_user_activity(user, "set_avatar")
+            users = load_json(USERS_FILE)
+
+        users[uid]["avatar_file_id"] = avatar_file_id
+        save_json(USERS_FILE, users)
+
+        context.user_data["waiting_for_avatar"] = False
+        menu_id = context.user_data.get("menu_message_id") or context.user_data.get("main_menu_msg_id")
+
+        prof_text, _ = get_profile_data(chat_id, user.first_name)
+
+        if menu_id:
+            try:
+                await context.bot.edit_message_media(
+                    chat_id=chat_id,
+                    message_id=menu_id,
+                    media=InputMediaPhoto(media=avatar_file_id, caption=prof_text, parse_mode="Markdown"),
+                    reply_markup=PROFILE_KEYBOARD,
+                )
+                return
+            except BadRequest:
+                pass
+
+        await update.message.reply_photo(
+            photo=avatar_file_id,
+            caption=prof_text,
+            parse_mode="Markdown",
+            reply_markup=PROFILE_KEYBOARD,
+        )
+
+async def handle_user_photo(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    chat_id = update.effective_chat.id
+    user = update.effective_user
+
+    if not context.user_data.get("waiting_for_avatar"):
+        return
+
+    photo = update.message.photo[-1]
+    avatar_file_id = photo.file_id
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    users = load_json(USERS_FILE)
+    uid = str(user.id)
+    if uid not in users:
+        track_user_activity(user, "set_avatar")
+        users = load_json(USERS_FILE)
+
+    users[uid]["avatar_file_id"] = avatar_file_id
+    save_json(USERS_FILE, users)
+
+    context.user_data["waiting_for_avatar"] = False
+    menu_id = context.user_data.get("menu_message_id") or context.user_data.get("main_menu_msg_id")
+
+    prof_text, _ = get_profile_data(chat_id, user.first_name)
+
+    if menu_id:
+        try:
+            await context.bot.edit_message_media(
+                chat_id=chat_id,
+                message_id=menu_id,
+                media=InputMediaPhoto(media=avatar_file_id, caption=prof_text, parse_mode="Markdown"),
+                reply_markup=PROFILE_KEYBOARD,
+            )
+            return
+        except BadRequest:
+            pass
+
+    await update.message.reply_photo(
+        photo=avatar_file_id,
+        caption=prof_text,
+        parse_mode="Markdown",
+        reply_markup=PROFILE_KEYBOARD,
+    )
 def main() -> None:
     threading.Thread(target=run_fake_server, daemon=True).start()
 
@@ -674,6 +925,7 @@ def main() -> None:
     app.add_handler(CommandHandler("stats", admin_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_text))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_user_photo))
 
     print("✅ Бот успешно запущен и ожидает сообщений!")
     app.run_polling()
