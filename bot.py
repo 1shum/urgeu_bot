@@ -916,7 +916,7 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         for a_id in ADMIN_IDS:
             try:
                 await context.bot.send_message(
-                    chat_id=a_id,
+                    chat_id=int(a_id),
                     text=(
                         f"🎫 **Новое сообщение в тикете #{ticket_id}**\n"
                         f"От: {user.first_name} (@{user.username or 'нет'})\n"
@@ -925,8 +925,9 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     reply_markup=admin_markup,
                     parse_mode="Markdown"
                 )
-            except Exception:
-                pass
+                print(f"✅ Уведомление по тикету #{ticket_id} успешно отправлено админу {a_id}")
+            except Exception as e:
+                print(f"❌ Ошибка отправки админу {a_id}: {e}")
 
         # Редактируем главное меню у пользователя (чистый экран)
         menu_id = context.user_data.get("menu_message_id") or context.user_data.get("main_menu_msg_id")
