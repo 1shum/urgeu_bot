@@ -39,7 +39,7 @@ BANNERS = {
 }
 
 def get_main_keyboard(subgroup: int = None) -> InlineKeyboardMarkup:
-    """Формирует главное меню: если подгруппа не выбрана, показывает кнопку добавления."""
+    """Формирует главное меню."""
     buttons = [
         [
             InlineKeyboardButton("📅 Сегодня", callback_data="today"),
@@ -78,17 +78,23 @@ SCHEDULE_KEYBOARD = InlineKeyboardMarkup([
     ]
 ])
 
+# Клавиатура под отдельным текстовым сообщением недели (удаляет сообщение и возвращает меню)
+WEEK_KEYBOARD = InlineKeyboardMarkup([
+    [
+        InlineKeyboardButton("◀️ Назад в главное меню", callback_data="close_week"),
+    ]
+])
+
 def get_welcome_text(user_name: str, subgroup: int = None) -> str:
-    """Формирует строгий и акцентный текст главного меню."""
-    subgroup_tag = f" `[Подгруппа {subgroup}]`" if subgroup else ""
+    """Формирует текст главного экрана меню."""
+    subgroup_str = f" `[Подгруппа {subgroup}]`" if subgroup else ""
     return (
         f"👋 Рады видеть, *{user_name}*!\n\n"
         f"🏛 **УрГЭУ | РАСПИСАНИЕ**\n"
-        f"📚 Группа: `{DEFAULT_GROUP}`{subgroup_tag}\n"
+        f"📚 Группа: `{DEFAULT_GROUP}`{subgroup_str}\n"
         f"────────────────────\n"
         f"Выберите действие в меню:"
     )
-
 
 async def start_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -105,25 +111,56 @@ async def start_command(
     await temp_msg.delete()
 
     with open(BANNERS["main"], "rb") as photo:
-        await update.message.reply_photo(
+        sent_msg = await update.message.reply_photo(
             photo=photo,
             caption=welcome_text,
             parse_mode="Markdown",
             reply_markup=get_main_keyboard(subgroup),
         )
+        context.user_data["main_menu_msg_id"] = sent_msg.message_id
 
 async def handle_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Обработчик нажатий на Inline-кнопки с бесшовной сменой баннера и текста."""
+    """Обработчик нажатий на Inline-кнопки."""
     query = update.callback_query
     await query.answer()
 
     data = query.data
+    chat_id = query.message.chat_id
     today = datetime.now(TIMEZONE)
     subgroup = context.user_data.get("subgroup")
     banner_key = "main"
 
+    # --- ЗАКРЫТИЕ НЕДЕЛЬНОГО РАСПИСАНИЯ И ВОЗВРАТ В МЕНЮ ---
+    if data == "close_week":
+        # 1. Удаляем само текстовое сообщение с расписанием недели
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+        # 2. Возвращаем верхний баннер в главное меню
+        main_menu_id = context.user_data.get("main_menu_msg_id")
+        if main_menu_id:
+            user_name = query.from_user.first_name
+            text = get_welcome_text(user_name, subgroup)
+            with open(BANNERS["main"], "rb") as photo:
+                try:
+                    await context.bot.edit_message_media(
+                        chat_id=chat_id,
+                        message_id=main_menu_id,
+                        media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
+                        reply_markup=get_main_keyboard(subgroup),
+                    )
+                except BadRequest:
+                    pass
+        return
+
+    # Запоминаем ID основного сообщения меню
+    context.user_data["main_menu_msg_id"] = query.message.message_id
+
+    # 1. Возврат в главное меню
     if data == "main_menu":
         context.user_data["waiting_for_date"] = False
         context.user_data["waiting_for_feedback"] = False
@@ -132,29 +169,18 @@ async def handle_callback(
         reply_markup = get_main_keyboard(subgroup)
         banner_key = "main"
 
-
+    # 2. Выбор подгруппы
     elif data == "choose_subgroup":
-
         context.user_data["waiting_for_date"] = False
-
         context.user_data["waiting_for_feedback"] = False
-
         text = (
-
             "👥 **ВЫБОР ПОДГРУППЫ**\n"
-
             "────────────────────\n"
-
             "Укажите номер вашей подгруппы (1 или 2).\n"
-
-            "В расписании останутся только релевантные пары."
-
+            "После этого бот будет показывать только ваши пары:"
         )
-
         reply_markup = SUBGROUP_KEYBOARD
-
         banner_key = "subgroup"
-
 
     elif data == "set_subgroup_1":
         context.user_data["subgroup"] = 1
@@ -202,6 +228,7 @@ async def handle_callback(
         reply_markup = SCHEDULE_KEYBOARD
         banner_key = "date"
 
+    # 3. Расписание
     else:
         context.user_data["waiting_for_date"] = False
         context.user_data["waiting_for_feedback"] = False
@@ -209,21 +236,37 @@ async def handle_callback(
         if data == "today":
             text = get_schedule_for_date(DEFAULT_GROUP, today, subgroup=subgroup)
             banner_key = "today"
+            reply_markup = SCHEDULE_KEYBOARD
+
         elif data == "tomorrow":
             target = today + timedelta(days=1)
             text = get_schedule_for_date(DEFAULT_GROUP, target, subgroup=subgroup)
             banner_key = "tomorrow"
+            reply_markup = SCHEDULE_KEYBOARD
+
         elif data in ("week_current", "week"):
-            text = get_schedule_for_week(DEFAULT_GROUP, next_week=False, subgroup=subgroup)
             banner_key = "week"
+            text = "🗓 **Расписание на текущую неделю сформировано отдельным сообщением ниже 👇**"
+            reply_markup = SCHEDULE_KEYBOARD
+
+            # Получаем полный текст недели
+            full_week_text = get_schedule_for_week(DEFAULT_GROUP, next_week=False, subgroup=subgroup)
+
+            # Отправляем отдельным сообщением с персональной кнопкой удаления
+            await query.message.reply_text(
+                full_week_text,
+                parse_mode="Markdown",
+                reply_markup=WEEK_KEYBOARD,
+            )
+
         else:
             text = "Неизвестная команда."
             banner_key = "main"
+            reply_markup = SCHEDULE_KEYBOARD
 
-        reply_markup = SCHEDULE_KEYBOARD
-
+    # Ограничение подписи под картинкой
     if len(text) > 1000:
-        text = text[:950].rsplit("\n", 1)[0] + "\n\n*(показана часть расписания)*"
+        text = text[:950].rsplit("\n", 1)[0] + "..."
 
     photo_path = BANNERS.get(banner_key, BANNERS["main"])
 
@@ -242,22 +285,21 @@ async def handle_callback(
                     reply_markup=reply_markup,
                 )
         elif "Message is not modified" not in error_msg:
-            print(f"Ошибка при смене баннера: {e}")
+            print(f"Ошибка смены баннера: {e}")
 
 async def handle_user_text(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Обработка ввода пользователя (даты, обратная связь) и ответов админа."""
+    """Обработка ввода пользователя (даты, отзывы, реплаи админа)."""
     user_input = update.message.text.strip()
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
 
-    # --- 1. ЕСЛИ ПИШЕТ АДМИН (ОТВЕТ НА ОБРАЩЕНИЕ ЧЕРЕЗ REPLY) ---
+    # 1. Ответ админа через Reply
     if user_id == ADMIN_ID and update.message.reply_to_message:
         replied_msg = update.message.reply_to_message
         replied_text = replied_msg.text or replied_msg.caption or ""
 
-        # Ищем ID пользователя в цитируемом сообщении
         match = re.search(r"ID:\s*`?(\d+)`?", replied_text)
         if match:
             target_user_id = int(match.group(1))
@@ -277,7 +319,7 @@ async def handle_user_text(
                 await update.message.reply_text(f"❌ Не удалось доставить ответ: {e}")
             return
 
-    # --- 2. ОБРАБОТКА ОБРАЩЕНИЯ В ПОДДЕРЖКУ ОТ ПОЛЬЗОВАТЕЛЯ ---
+    # 2. Обработка отзыва от пользователя
     if context.user_data.get("waiting_for_feedback"):
         try:
             await update.message.delete()
@@ -293,7 +335,7 @@ async def handle_user_text(
             f"👤 От: {user.first_name} ({username})\n"
             f"🆔 ID: `{user.id}`\n\n"
             f"💬 **Текст:**\n{user_input}\n\n"
-            f"*(Чтобы ответить, просто ответьте (Reply) на это сообщение)*"
+            f"*(Чтобы ответить, просто сделайте Reply на это сообщение)*"
         )
 
         try:
@@ -308,7 +350,7 @@ async def handle_user_text(
         context.user_data["waiting_for_feedback"] = False
         success_text = (
             "✅ **Спасибо! Ваше сообщение отправлено.**\n\n"
-            "Разработчик обязательно прочитает его и при необходимости ответит вам прямо здесь в боте."
+            "Разработчик обязательно прочитает его и при необходимости ответит вам прямо здесь."
         )
 
         if menu_id:
@@ -324,7 +366,7 @@ async def handle_user_text(
                 pass
         return
 
-    # --- 3. ОБРАБОТКА ВВОДА ДАТЫ ---
+    # 3. Ввод даты
     if context.user_data.get("waiting_for_date"):
         try:
             await update.message.delete()
@@ -343,7 +385,7 @@ async def handle_user_text(
             context.user_data["waiting_for_date"] = False
 
             if len(schedule_text) > 1000:
-                schedule_text = schedule_text[:950].rsplit("\n", 1)[0] + "\n\n*(показана часть)*"
+                schedule_text = schedule_text[:950].rsplit("\n", 1)[0] + "..."
 
             if menu_id:
                 try:
@@ -410,4 +452,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-
