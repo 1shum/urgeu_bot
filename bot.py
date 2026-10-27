@@ -1,4 +1,5 @@
 import os
+import re
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
@@ -22,7 +23,6 @@ from telegram.ext import (
 
 from parser_rasp import get_schedule_for_date, get_schedule_for_week
 
-# Токен и базовые настройки
 BOT_TOKEN = "8970456575:AAFUoFW-hT0pcNJE0mfE3Xzx_Wq9-pkFU40"
 DEFAULT_GROUP = "ПИЭ-26-2"
 ADMIN_ID = 1087118817
@@ -38,7 +38,6 @@ BANNERS = {
     "feedback": "banners/feedback.png",
 }
 
-# Клавиатура главного меню
 def get_main_keyboard(subgroup: int = None) -> InlineKeyboardMarkup:
     """Формирует главное меню: если подгруппа не выбрана, показывает кнопку добавления."""
     buttons = [
@@ -63,8 +62,6 @@ def get_main_keyboard(subgroup: int = None) -> InlineKeyboardMarkup:
 
     return InlineKeyboardMarkup(buttons)
 
-
-# Клавиатура выбора подгруппы
 SUBGROUP_KEYBOARD = InlineKeyboardMarkup([
     [
         InlineKeyboardButton("1️⃣ 1-я подгруппа", callback_data="set_subgroup_1"),
@@ -75,13 +72,11 @@ SUBGROUP_KEYBOARD = InlineKeyboardMarkup([
     ]
 ])
 
-# Клавиатура под расписанием (с кнопкой "Назад")
 SCHEDULE_KEYBOARD = InlineKeyboardMarkup([
     [
         InlineKeyboardButton("◀️ Главное меню", callback_data="main_menu"),
     ]
 ])
-
 
 def get_welcome_text(user_name: str, subgroup: int = None) -> str:
     """Формирует текст главного экрана меню с учетом подгруппы."""
@@ -92,7 +87,6 @@ def get_welcome_text(user_name: str, subgroup: int = None) -> str:
         f"👥 Группа: `{DEFAULT_GROUP}`{subgroup_str}\n\n"
         f"Выбери нужный раздел в меню ниже 👇"
     )
-
 
 async def start_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -105,11 +99,9 @@ async def start_command(
     user_name = update.effective_user.first_name
     welcome_text = get_welcome_text(user_name, subgroup)
 
-    # Удаляем нижнюю клавиатуру, если осталась старая
     temp_msg = await update.message.reply_text("⏳", reply_markup=ReplyKeyboardRemove())
     await temp_msg.delete()
 
-    # Отправляем баннер "Главное меню" с приветственным текстом
     with open(BANNERS["main"], "rb") as photo:
         await update.message.reply_photo(
             photo=photo,
@@ -117,7 +109,6 @@ async def start_command(
             parse_mode="Markdown",
             reply_markup=get_main_keyboard(subgroup),
         )
-
 
 async def handle_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -131,7 +122,6 @@ async def handle_callback(
     subgroup = context.user_data.get("subgroup")
     banner_key = "main"
 
-    # 1. Возврат в главное меню
     if data == "main_menu":
         context.user_data["waiting_for_date"] = False
         context.user_data["waiting_for_feedback"] = False
@@ -140,7 +130,6 @@ async def handle_callback(
         reply_markup = get_main_keyboard(subgroup)
         banner_key = "main"
 
-    # 2. Экран выбора подгруппы
     elif data == "choose_subgroup":
         context.user_data["waiting_for_date"] = False
         context.user_data["waiting_for_feedback"] = False
@@ -152,7 +141,6 @@ async def handle_callback(
         reply_markup = SUBGROUP_KEYBOARD
         banner_key = "subgroup"
 
-    # 3. Установка подгруппы 1
     elif data == "set_subgroup_1":
         context.user_data["subgroup"] = 1
         subgroup = 1
@@ -164,7 +152,6 @@ async def handle_callback(
         reply_markup = get_main_keyboard(subgroup)
         banner_key = "main"
 
-    # 4. Установка подгруппы 2
     elif data == "set_subgroup_2":
         context.user_data["subgroup"] = 2
         subgroup = 2
@@ -176,7 +163,6 @@ async def handle_callback(
         reply_markup = get_main_keyboard(subgroup)
         banner_key = "main"
 
-    # 5. Режим обратной связи (Идеи / Поддержка)
     elif data == "feedback":
         context.user_data["waiting_for_date"] = False
         context.user_data["waiting_for_feedback"] = True
@@ -189,7 +175,6 @@ async def handle_callback(
         reply_markup = SCHEDULE_KEYBOARD
         banner_key = "feedback"
 
-    # 6. Режим выбора конкретного дня
     elif data == "pick_date":
         context.user_data["waiting_for_feedback"] = False
         context.user_data["waiting_for_date"] = True
@@ -202,7 +187,6 @@ async def handle_callback(
         reply_markup = SCHEDULE_KEYBOARD
         banner_key = "date"
 
-    # 7. Запросы расписания
     else:
         context.user_data["waiting_for_date"] = False
         context.user_data["waiting_for_feedback"] = False
@@ -223,13 +207,11 @@ async def handle_callback(
 
         reply_markup = SCHEDULE_KEYBOARD
 
-    # Безопасное ограничение длины подписи (Telegram лимит 1024 символа для caption)
     if len(text) > 1000:
         text = text[:950].rsplit("\n", 1)[0] + "\n\n*(показана часть расписания)*"
 
     photo_path = BANNERS.get(banner_key, BANNERS["main"])
 
-    # Обновляем медиа и текст
     try:
         with open(photo_path, "rb") as photo:
             await query.edit_message_media(
@@ -238,7 +220,6 @@ async def handle_callback(
             )
     except BadRequest as e:
         error_msg = str(e)
-        # Если Telegram ругается на Markdown из-за обрезки — шлем чистым текстом
         if "Can't parse entities" in error_msg:
             with open(photo_path, "rb") as photo:
                 await query.edit_message_media(
@@ -248,15 +229,40 @@ async def handle_callback(
         elif "Message is not modified" not in error_msg:
             print(f"Ошибка при смене баннера: {e}")
 
-
 async def handle_user_text(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Обработка текста от пользователя (даты или отзыва) с обновлением баннера."""
+    """Обработка ввода пользователя (даты, обратная связь) и ответов админа."""
     user_input = update.message.text.strip()
     chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
 
-    # 1. ОБРАБОТКА ОТЗЫВА
+    # --- 1. ЕСЛИ ПИШЕТ АДМИН (ОТВЕТ НА ОБРАЩЕНИЕ ЧЕРЕЗ REPLY) ---
+    if user_id == ADMIN_ID and update.message.reply_to_message:
+        replied_msg = update.message.reply_to_message
+        replied_text = replied_msg.text or replied_msg.caption or ""
+
+        # Ищем ID пользователя в цитируемом сообщении
+        match = re.search(r"ID:\s*`?(\d+)`?", replied_text)
+        if match:
+            target_user_id = int(match.group(1))
+            answer_for_user = (
+                "📩 **Ответ от разработчика:**\n\n"
+                f"{user_input}\n\n"
+                "_Если у вас остались вопросы, вы всегда можете написать в Поддержку снова._"
+            )
+            try:
+                await context.bot.send_message(
+                    chat_id=target_user_id,
+                    text=answer_for_user,
+                    parse_mode="Markdown",
+                )
+                await update.message.reply_text("✅ Ответ успешно доставлен пользователю!")
+            except Exception as e:
+                await update.message.reply_text(f"❌ Не удалось доставить ответ: {e}")
+            return
+
+    # --- 2. ОБРАБОТКА ОБРАЩЕНИЯ В ПОДДЕРЖКУ ОТ ПОЛЬЗОВАТЕЛЯ ---
     if context.user_data.get("waiting_for_feedback"):
         try:
             await update.message.delete()
@@ -271,7 +277,8 @@ async def handle_user_text(
             f"📩 **Новое обращение!**\n\n"
             f"👤 От: {user.first_name} ({username})\n"
             f"🆔 ID: `{user.id}`\n\n"
-            f"💬 **Текст:**\n{user_input}"
+            f"💬 **Текст:**\n{user_input}\n\n"
+            f"*(Чтобы ответить, просто ответьте (Reply) на это сообщение)*"
         )
 
         try:
@@ -286,7 +293,7 @@ async def handle_user_text(
         context.user_data["waiting_for_feedback"] = False
         success_text = (
             "✅ **Спасибо! Ваше сообщение отправлено.**\n\n"
-            "Разработчик обязательно его прочитает."
+            "Разработчик обязательно прочитает его и при необходимости ответит вам прямо здесь в боте."
         )
 
         if menu_id:
@@ -302,7 +309,7 @@ async def handle_user_text(
                 pass
         return
 
-    # 2. ОБРАБОТКА ДАТЫ
+    # --- 3. ОБРАБОТКА ВВОДА ДАТЫ ---
     if context.user_data.get("waiting_for_date"):
         try:
             await update.message.delete()
@@ -359,7 +366,6 @@ async def handle_user_text(
     except Exception:
         pass
 
-
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -369,12 +375,10 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
 
-
 def run_fake_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
-
 
 def main() -> None:
     threading.Thread(target=run_fake_server, daemon=True).start()
@@ -389,6 +393,6 @@ def main() -> None:
     print("✅ Бот успешно запущен и ожидает сообщений!")
     app.run_polling()
 
-
 if __name__ == '__main__':
     main()
+
