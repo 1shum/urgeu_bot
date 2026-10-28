@@ -609,35 +609,60 @@ async def handle_callback(
         return
 
     elif data == "portal_rating":
+
         login = context.user_data.get("portal_login")
+
         enc_pw = context.user_data.get("portal_password")
 
         if not login or not enc_pw:
             await query.answer("Сначала привяжи аккаунт портала!", show_alert=True)
+
             return
 
-        status_msg = await query.message.reply_text("⏳ *Подключаюсь к порталу УрГЭУ и считаю баллы...*",
-                                                    parse_mode="Markdown")
+        # Если кнопка нажата из карточки рейтинга ("Обновить"), редактируем ее.
+
+        #Если из профиля — шлем статусное сообщение.
+
+        is_updating = (query.message.text and "Рейтинг" in query.message.text) or "Обновление" in (query.message.text or "")
+
+        if is_updating:
+
+            status_msg = query.message
+
+            await status_msg.edit_text("⏳ *Обновляю баллы с портала УрГЭУ...*", parse_mode="Markdown")
+
+        else:
+
+            status_msg = await query.message.reply_text("⏳ *Подключаюсь к порталу УрГЭУ и считаю баллы...*",
+                                                parse_mode="Markdown")
 
         try:
+
             raw_password = decrypt_password(enc_pw)
+
             success, text = await get_portal_rating(login, raw_password)
+
         except Exception as e:
+
             success, text = False, f"Ошибка дешифрования данных: {e}"
 
         kb = InlineKeyboardMarkup([
+
             [InlineKeyboardButton("🔄 Обновить", callback_data="portal_rating")],
-            [InlineKeyboardButton("◀️ Назад в профиль", callback_data="profile_menu")]
+
+            [InlineKeyboardButton("◀️ Закрыть рейтинг", callback_data="close_rating")]
+
         ])
 
-        await status_msg.delete()
-        if success:
-            await query.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
-        else:
-            await query.message.reply_text(f"❌ *Ошибка получения рейтинга:*\n{text}", parse_mode="Markdown",
-                                           reply_markup=kb)
-        return
+        await status_msg.edit_text(text, parse_mode="Markdown", reply_markup=kb)
 
+        return
+    elif data == "close_rating":
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        return
     elif data == "profile_change_photo":
         context.user_data["waiting_for_date"] = False
         context.user_data["waiting_for_feedback"] = False
@@ -955,64 +980,92 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # 2. Если пользователь вводит сообщение тикета
         # Ввод логина от портала УрГЭУ
     if context.user_data.get("waiting_for_portal_login"):
-            login = update.message.text.strip()
-            context.user_data["temp_portal_login"] = login
-            context.user_data["waiting_for_portal_login"] = False
-            context.user_data["waiting_for_portal_password"] = True
+        login = update.message.text.strip()
+        context.user_data["waiting_for_portal_login"] = False
+        context.user_data["waiting_for_portal_password"] = True
 
-            await update.message.reply_text(
-                f"Логин `{login}` принят.\n\nТеперь введи *пароль* от портала:\n"
-                "_(Сообщение с паролем будет сразу же удалено из чата в целях безопасности)_",
-                parse_mode="Markdown"
-            )
-            return
-
-        # Ввод пароля от портала УрГЭУ
-    if context.user_data.get("waiting_for_portal_password"):
-            password = update.message.text.strip()
-            login = context.user_data.get("temp_portal_login")
-
-            # Удаляем сообщение с паролем из чата
-            try:
-                await update.message.delete()
-            except Exception:
-                pass
-
-            check_msg = await update.message.reply_text("⏳ Проверяем данные на портале УрГЭУ...")
-
-            # Проверяем авторизацию через функцию из portal.py
-            success, msg = await check_portal_auth(login, password)
-            await check_msg.delete()
-
-            if success:
-                context.user_data["portal_login"] = login
-                context.user_data["portal_password"] = encrypt_password(password)
-                context.user_data["waiting_for_portal_password"] = False
-                context.user_data.pop("temp_portal_login", None)
-
-                kb = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📊 Посмотреть рейтинг", callback_data="portal_rating")],
-                    [InlineKeyboardButton("👤 В профиль", callback_data="profile_menu")]
-                ])
-                await update.message.reply_text("✅ *Портал УрГЭУ успешно привязан!*", parse_mode="Markdown",
-                                                reply_markup=kb)
-            else:
-                context.user_data["waiting_for_portal_password"] = False
-                kb = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Попробовать снова", callback_data="portal_bind")],
-                    [InlineKeyboardButton("◀️ В профиль", callback_data="profile_menu")]
-                ])
-                await update.message.reply_text(f"❌ *Ошибка входа:* {msg}", parse_mode="Markdown", reply_markup=kb)
-            return
-    if context.user_data.get("waiting_for_feedback"):
-        context.user_data["waiting_for_feedback"] = False
-
-        # Удаляем входящее текстовое сообщение для сохранения чистоты
+        # Удаляем сообщение пользователя с логином
         try:
             await update.message.delete()
         except Exception:
             pass
 
+        # Удаляем предыдущий вопрос бота "Введи свой ID" (если он сохранен)
+        prev_prompt = context.user_data.pop("portal_prompt_msg_id", None)
+        if prev_prompt:
+            try:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=prev_prompt)
+            except Exception:
+                pass
+
+        # Отправляем вопрос пароля и запоминаем ID сообщения, чтобы потом стереть
+        pwd_prompt = await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Логин `{login}` принят.\n\nТеперь введи *пароль* от портала:\n_(Сообщение с паролем будет сразу же удалено в целях безопасности)_",
+            parse_mode="Markdown"
+        )
+        context.user_data["portal_pwd_prompt_id"] = pwd_prompt.message_id
+        return
+
+        # Ввод пароля от портала УрГЭУ
+    if context.user_data.get("waiting_for_portal_password"):
+        password = update.message.text.strip()
+        login = context.user_data.get("temp_portal_login")
+        chat_id = update.effective_chat.id
+
+        # Удаляем сообщение с паролем из чата
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+        # Удаляем вопрос бота "Теперь введи пароль"
+        pwd_prompt_id = context.user_data.pop("portal_pwd_prompt_id", None)
+        if pwd_prompt_id:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=pwd_prompt_id)
+            except Exception:
+                pass
+
+        check_msg = await context.bot.send_message(chat_id=chat_id, text="⏳ Проверяем данные на портале УрГЭУ...")
+
+        # Проверяем авторизацию через функцию из portal.py
+        success, msg = await check_portal_auth(login, password)
+        try:
+            await check_msg.delete()
+        except Exception:
+            pass
+
+        if success:
+            context.user_data["portal_login"] = login
+            context.user_data["portal_password"] = encrypt_password(password)
+            context.user_data["waiting_for_portal_password"] = False
+            context.user_data.pop("temp_portal_login", None)
+
+            # Формируем клавиатуру успеха
+            success_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 Посмотреть рейтинг", callback_data="portal_rating")],
+                [InlineKeyboardButton("👤 В профиль", callback_data="profile")]
+            ])
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="✅ *Портал УрГЭУ успешно привязан!*",
+                parse_mode="Markdown",
+                reply_markup=success_kb
+            )
+        else:
+            context.user_data["waiting_for_portal_password"] = False
+            fail_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Попробовать снова", callback_data="portal_bind")],
+                [InlineKeyboardButton("◀️ В профиль", callback_data="profile")]
+            ])
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"❌ *Ошибка входа:* {msg}",
+                parse_mode="Markdown",
+                reply_markup=fail_kb
+            )
+        return
         active_t = get_active_ticket(chat_id)
         now_str = datetime.now().strftime("%d.%m %H:%M")
 
@@ -1141,7 +1194,7 @@ def run_fake_server():
                     chat_id=chat_id,
                     message_id=menu_id,
                     media=InputMediaPhoto(media=avatar_file_id, caption=prof_text, parse_mode="Markdown"),
-                    reply_markup=PROFILE_KEYBOARD,
+                    reply_markup=get_profile_keyboard(False),
                 )
                 return
             except BadRequest:
@@ -1151,7 +1204,7 @@ def run_fake_server():
             photo=avatar_file_id,
             caption=prof_text,
             parse_mode="Markdown",
-            reply_markup=PROFILE_KEYBOARD,
+            reply_markup=get_profile_keyboard(False),
         )
 
 async def handle_user_photo(
@@ -1191,7 +1244,7 @@ async def handle_user_photo(
                 chat_id=chat_id,
                 message_id=menu_id,
                 media=InputMediaPhoto(media=avatar_file_id, caption=prof_text, parse_mode="Markdown"),
-                reply_markup=PROFILE_KEYBOARD,
+                reply_markup=get_profile_keyboard(False),
             )
             return
         except BadRequest:
@@ -1201,7 +1254,7 @@ async def handle_user_photo(
         photo=avatar_file_id,
         caption=prof_text,
         parse_mode="Markdown",
-        reply_markup=PROFILE_KEYBOARD,
+        reply_markup=get_profile_keyboard(False),
     )
 def main() -> None:
     threading.Thread(target=run_fake_server, daemon=True).start()
