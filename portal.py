@@ -8,6 +8,7 @@ from cryptography.fernet import Fernet
 
 PORTAL_LOGIN_URL = "https://portal.usue.ru/portal/xlogin"
 PORTAL_BASE_URL = "https://portal.usue.ru/portal"
+PORTAL_PROXY = "http://p7Se6A:zxDB5D@160.116.216.13:8000"
 
 # Ключ шифрования. Для продакшена на Render добавь переменную окружения PORTAL_SECRET_KEY
 SECRET_KEY = os.getenv("PORTAL_SECRET_KEY")
@@ -50,7 +51,7 @@ async def check_portal_auth(login: str, password: str) -> tuple[bool, str]:
     ) as session:
         try:
             async with session.post(
-                PORTAL_LOGIN_URL, data=payload, allow_redirects=True
+                PORTAL_LOGIN_URL, data=payload, allow_redirects=True, proxy=PORTAL_PROXY
             ) as response:
                 html = await response.text()
                 if response.status != 200:
@@ -103,7 +104,7 @@ async def get_portal_rating(login: str, password: str) -> tuple[bool, str]:
     async with aiohttp.ClientSession(connector=connector, cookie_jar=jar, headers=headers) as session:
         try:
             # 1. Логин
-            async with session.post(PORTAL_LOGIN_URL, data=payload, allow_redirects=True) as resp:
+            async with session.post(PORTAL_LOGIN_URL, data=payload, allow_redirects=True, proxy=PORTAL_PROXY) as resp:
                 if resp.status != 200:
                     return False, "Не удалось войти на портал."
 
