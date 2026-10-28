@@ -404,7 +404,7 @@ async def start_command(
 
     # 2. Если группа уже выбрана — обычное главное меню
     subgroup = context.user_data.get("subgroup")
-    welcome_text = get_welcome_text(user_name, subgroup)
+    welcome_text = get_welcome_text(user_name, subgroup,group=user_group)
 
     temp_msg = await update.message.reply_text("⏳", reply_markup=ReplyKeyboardRemove())
     await temp_msg.delete()
@@ -514,7 +514,8 @@ async def handle_callback(
         main_menu_id = context.user_data.get("main_menu_msg_id")
         if main_menu_id:
             user_name = query.from_user.first_name
-            text = get_welcome_text(user_name, subgroup)
+            user_group = context.user_data.get("user_group") or DEFAULT_GROUP
+            text = get_welcome_text(user_name, subgroup, group=user_group)
             with open(BANNERS["main"], "rb") as photo:
                 try:
                     await context.bot.edit_message_media(
@@ -750,7 +751,8 @@ async def handle_callback(
         context.user_data["waiting_for_date"] = False
         context.user_data["waiting_for_feedback"] = False
         user_name = query.from_user.first_name
-        text = get_welcome_text(user_name, subgroup)
+        user_group = context.user_data.get("user_group") or DEFAULT_GROUP
+        text = get_welcome_text(user_name, subgroup, group=user_group)
         reply_markup = get_main_keyboard(subgroup)
         banner_key = "main"
 
@@ -783,9 +785,10 @@ async def handle_callback(
             save_notifications(notifs)
 
         user_name = query.from_user.first_name
+        current_group = context.user_data.get("user_group") or DEFAULT_GROUP
         text = (
             f"✅ **Подгруппа {val} успешно установлена!**\n\n"
-            f"{get_welcome_text(user_name, subgroup)}"
+            f"{get_welcome_text(user_name, subgroup, group=current_group)}"
         )
         reply_markup = get_main_keyboard(subgroup)
         banner_key = "main"
@@ -1056,7 +1059,7 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # 6. Обновляем экран онбординга до главного меню
         menu_msg_id = context.user_data.get("main_menu_msg_id")
         user_name = update.effective_user.first_name
-        welcome_text = get_welcome_text(user_name, subgroup=None)
+        welcome_text = get_welcome_text(user_name, subgroup=None, group=entered_group)
 
         try:
             with open(BANNERS["main"], "rb") as photo:
