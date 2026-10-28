@@ -1070,20 +1070,20 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     active_t = get_active_ticket(chat_id)
     now_str = datetime.now().strftime("%d.%m %H:%M")
 
-        if active_t:
-        # Дополняем существующий открытый тикет
-            tickets = load_tickets()
-            tickets[active_t["id"]]["messages"].append({
-                "sender": "user",
-                "text": text,
-                "time": now_str
-            })
-            save_tickets(tickets)
-            ticket_id = active_t["id"]
-        else:
-            # Создаем новый тикет
-            new_ticket = create_ticket(chat_id, user.first_name, text)
-            ticket_id = new_ticket["id"]
+    if active_t:
+    # Дополняем существующий открытый тикет
+        tickets = load_tickets()
+        tickets[active_t["id"]]["messages"].append({
+            "sender": "user",
+            "text": text,
+            "time": now_str
+        })
+        save_tickets(tickets)
+        ticket_id = active_t["id"]
+    else:
+        # Создаем новый тикет
+        new_ticket = create_ticket(chat_id, user.first_name, text)
+        ticket_id = new_ticket["id"]
 
         # Оповещаем администраторов о новом сообщении
         admin_markup = InlineKeyboardMarkup([
