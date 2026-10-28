@@ -11,6 +11,7 @@ from parser_rasp import (
     get_schedule_for_date,
     get_schedule_for_week,
     get_short_schedule_for_date,
+    check_group_exists,
 )
 from telegram import (
     InlineKeyboardButton,
@@ -196,6 +197,9 @@ def get_profile_keyboard(is_portal_linked: bool = False) -> InlineKeyboardMarkup
             InlineKeyboardButton("📷 Сменить фото профиля", callback_data="profile_change_photo")
         ],
         [
+            InlineKeyboardButton("🔄 Сменить / отвязать группу", callback_data="unlink_group")
+        ],
+        [
             InlineKeyboardButton("👥 Подгруппа", callback_data="choose_subgroup"),
             InlineKeyboardButton("🔔 Уведомления", callback_data="notif_menu")
         ]
@@ -267,7 +271,7 @@ WEEK_KEYBOARD = InlineKeyboardMarkup([
     ]
 ])
 
-def get_profile_data(user_id: int, first_name: str) -> tuple[str, str | None]:
+def get_profile_data(user_id: int, first_name: str, user_group: str = "Не выбрана") -> tuple[str, str | None]:
     """Возвращает готовый текст профиля и file_id аватарки (если есть)."""
     users = load_json(USERS_FILE)
     notifs = load_notifications()
@@ -275,7 +279,8 @@ def get_profile_data(user_id: int, first_name: str) -> tuple[str, str | None]:
     u_info = users.get(str(user_id), {})
     n_info = notifs.get(str(user_id), {})
 
-    # Статус подгруппы
+    # Статус группы
+    group_str = f"`{user_group}`" if user_group else "не выбрана"
     subgroup = n_info.get("subgroup") or u_info.get("subgroup")
     subgroup_str = f"{subgroup}-я подгруппа" if subgroup else "не выбрана"
 
@@ -293,26 +298,23 @@ def get_profile_data(user_id: int, first_name: str) -> tuple[str, str | None]:
 
     text = (
         f"👤 **ЛИЧНЫЙ КАБИНЕТ**\n"
-        f"────────────────────\n"
+        f"🎓 *Группа:* {group_str}\n"
         f"Студент: *{first_name}* {username}\n"
-        f"Группа: `{DEFAULT_GROUP}`\n\n"
         f"👥 **Подгруппа:** {subgroup_str}\n"
         f"🔔 **Уведомления:** {notif_str}\n"
         f"🎓 **Кабинет учащегося:** {lk_status}\n"
         f"⚡ **Всего действий:** `{actions}`\n"
-        f"────────────────────\n"
         f"_Отправьте фото в чат, чтобы установить или сменить аватарку профиля._"
     )
     avatar_file_id = u_info.get("avatar_file_id")
     return text, avatar_file_id
 
-def get_welcome_text(user_name: str, subgroup: int = None) -> str:
+def get_welcome_text(user_name: str, subgroup: int = None, group: str = DEFAULT_GROUP) -> str:
     subgroup_str = f" `[Подгруппа {subgroup}]`" if subgroup else ""
     return (
         f"👋 Рады видеть, *{user_name}*!\n\n"
         f"🏛 **УрГЭУ | РАСПИСАНИЕ**\n"
-        f"📚 Группа: `{DEFAULT_GROUP}`{subgroup_str}\n"
-        f"────────────────────\n"
+        f"📚 Группа: `{group}`{subgroup_str}\n"
         f"Выберите действие в меню:"
     )
 
@@ -337,8 +339,8 @@ async def send_daily_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
             chat_id = int(user_id_str)
             subgroup = user_info.get("subgroup")
 
-            short_text = get_short_schedule_for_date(DEFAULT_GROUP, tomorrow, subgroup=subgroup)
-
+            user_group = user_info.get("user_group") or DEFAULT_GROUP
+            short_text = get_short_schedule_for_date(user_group, tomorrow, subgroup=subgroup)
             keyboard = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton(
@@ -366,9 +368,42 @@ async def start_command(
 
     context.user_data["waiting_for_date"] = False
     context.user_data["waiting_for_feedback"] = False
+    context.user_data["waiting_for_group"] = False
 
-    subgroup = context.user_data.get("subgroup")
     user_name = update.effective_user.first_name
+    chat_id = update.effective_chat.id
+
+    # 1. Если группа ещё не выбрана — показываем экран онбординга (только 1 кнопка)
+    users = load_json(USERS_FILE)
+    u_info = users.get(str(chat_id), {})
+    user_group = context.user_data.get("user_group") or u_info.get("user_group")
+    if user_group:
+        context.user_data["user_group"] = user_group
+    if not user_group:
+        temp_msg = await update.message.reply_text("⏳", reply_markup=ReplyKeyboardRemove())
+        await temp_msg.delete()
+
+        welcome_new = (
+            f"👋 *Привет, {user_name}!* \n\n"
+            f"Я бот с расписанием и сервисами для студентов *УрГЭУ* 🎓\n\n"
+            f"Для начала работы укажи номер своей учебной группы."
+        )
+        onboarding_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎓 Ввести группу", callback_data="onboarding_set_group")]
+        ])
+
+        with open(BANNERS["main"], "rb") as photo:
+            sent_msg = await update.message.reply_photo(
+                photo=photo,
+                caption=welcome_new,
+                parse_mode="Markdown",
+                reply_markup=onboarding_kb
+            )
+        context.user_data["main_menu_msg_id"] = sent_msg.message_id
+        return
+
+    # 2. Если группа уже выбрана — обычное главное меню
+    subgroup = context.user_data.get("subgroup")
     welcome_text = get_welcome_text(user_name, subgroup)
 
     temp_msg = await update.message.reply_text("⏳", reply_markup=ReplyKeyboardRemove())
@@ -381,7 +416,7 @@ async def start_command(
             parse_mode="Markdown",
             reply_markup=get_main_keyboard(subgroup),
         )
-        context.user_data["main_menu_msg_id"] = sent_msg.message_id
+    context.user_data["main_menu_msg_id"] = sent_msg.message_id
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Панель администратора со статистикой активности."""
@@ -460,7 +495,8 @@ async def handle_callback(
     if data.startswith("show_full_"):
         date_str = data.replace("show_full_", "")
         target_date = datetime.strptime(date_str, "%d.%m.%Y").replace(tzinfo=TIMEZONE)
-        full_text = get_schedule_for_date(DEFAULT_GROUP, target_date, subgroup=subgroup)
+        user_group = context.user_data.get("user_group") or DEFAULT_GROUP
+        full_text = get_schedule_for_date(user_group, target_date, subgroup=subgroup)
         await query.message.reply_text(
             full_text,
             parse_mode="Markdown",
@@ -562,7 +598,8 @@ async def handle_callback(
         context.user_data["waiting_for_portal_login"] = False
         context.user_data["waiting_for_portal_password"] = False
 
-        prof_text, avatar_id = get_profile_data(chat_id, query.from_user.first_name)
+        user_group = context.user_data.get("user_group", "Не выбрана")
+        prof_text, avatar_id = get_profile_data(chat_id, query.from_user.first_name, user_group=user_group)
 
         # Проверяем, привязан ли портал у пользователя
         is_linked = bool(context.user_data.get("portal_login") and context.user_data.get("portal_password"))
@@ -618,6 +655,30 @@ async def handle_callback(
         prof_text, _ = get_profile_data(chat_id, query.from_user.first_name)
         await query.edit_message_caption(caption=prof_text, reply_markup=get_profile_keyboard(False),
                                          parse_mode="Markdown")
+        return
+    elif data == "unlink_group":
+        await query.answer("Группа отвязана")
+
+        # 1. Очищаем группу из оперативной памяти
+        context.user_data.pop("user_group", None)
+        context.user_data.pop("subgroup", None)
+        context.user_data["waiting_for_group"] = True
+
+        # 2. Удаляем группу из файла users.json
+        users = load_json(USERS_FILE)
+        uid_str = str(chat_id)
+        if uid_str in users:
+            users[uid_str].pop("user_group", None)
+            users[uid_str].pop("subgroup", None)
+            save_json(USERS_FILE, users)
+
+        # 3. Отправляем аккуратный запрос на ввод новой группы
+        prompt_msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text="✍️ *Введи номер новой группы:*\n_(Например: `ПИЭ-26-2` или `АИС-26-1`)_",
+            parse_mode="Markdown"
+        )
+        context.user_data["group_prompt_msg_id"] = prompt_msg.message_id
         return
 
     elif data == "portal_rating":
@@ -879,19 +940,30 @@ async def handle_callback(
         reply_markup = SCHEDULE_KEYBOARD
         banner_key = "date"
 
+    elif data == "onboarding_set_group":
+        await query.answer()
+        context.user_data["waiting_for_group"] = True
+        prompt_msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text="✍️ *Введи номер своей группы:*\n_(Например: `ПИЭ-26-2` или `АИС-26-1`)_",
+            parse_mode="Markdown"
+        )
+        context.user_data["group_prompt_msg_id"] = prompt_msg.message_id
+        return
+
     # 8. Расписание
     else:
         context.user_data["waiting_for_date"] = False
         context.user_data["waiting_for_feedback"] = False
-
+        user_group = context.user_data.get("user_group") or DEFAULT_GROUP
         if data == "today":
-            text = get_schedule_for_date(DEFAULT_GROUP, today, subgroup=subgroup)
+            text = get_schedule_for_date(user_group, today, subgroup=subgroup)
             banner_key = "today"
             reply_markup = SCHEDULE_KEYBOARD
 
         elif data == "tomorrow":
             target = today + timedelta(days=1)
-            text = get_schedule_for_date(DEFAULT_GROUP, target, subgroup=subgroup)
+            text = get_schedule_for_date(user_group, target, subgroup=subgroup)
             banner_key = "tomorrow"
             reply_markup = SCHEDULE_KEYBOARD
 
@@ -899,7 +971,7 @@ async def handle_callback(
             banner_key = "week"
             text = "🗓 **Расписание на текущую неделю сформировано отдельным сообщением ниже 👇**"
             reply_markup = SCHEDULE_KEYBOARD
-            full_week_text = get_schedule_for_week(DEFAULT_GROUP, next_week=False, subgroup=subgroup)
+            full_week_text = get_schedule_for_week(user_group, next_week=False, subgroup=subgroup)
             await query.message.reply_text(
                 full_week_text,
                 parse_mode="Markdown",
@@ -938,7 +1010,73 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     chat_id = update.effective_chat.id
     user = update.effective_user
     text = update.message.text.strip()
+    # 0. Ввод группы (онбординг или смена группы)
+    if context.user_data.get("waiting_for_group"):
+        # 1. Удаляем сообщение пользователя с названием группы
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
 
+        # 2. Удаляем сообщение бота "Введи номер своей группы"
+        prompt_id = context.user_data.pop("group_prompt_msg_id", None)
+        if prompt_id:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=prompt_id)
+            except Exception:
+                pass
+
+        entered_group = text.upper().strip()
+
+        # 3. Проверка через парсер
+        if not check_group_exists(entered_group):
+            err_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"⚠️ Группа *{entered_group}* не найдена в расписании УрГЭУ!\n\nПопробуй ещё раз:",
+                parse_mode="Markdown"
+            )
+            context.user_data["group_prompt_msg_id"] = err_msg.message_id
+            return
+
+        # 4. Сохраняем группу
+        context.user_data["user_group"] = entered_group
+        # Сохраняем группу в users.json
+        users = load_json(USERS_FILE)
+        uid_str = str(chat_id)
+        if uid_str not in users:
+            users[uid_str] = {}
+        users[uid_str]["user_group"] = entered_group
+        users[uid_str].pop("subgroup", None)
+        save_json(USERS_FILE, users)
+        context.user_data["waiting_for_group"] = False
+
+        # 5. Очищаем старую подгруппу (у новой группы своя нумерация)
+        context.user_data.pop("subgroup", None)
+
+        # 6. Обновляем экран онбординга до главного меню
+        menu_msg_id = context.user_data.get("main_menu_msg_id")
+        user_name = update.effective_user.first_name
+        welcome_text = get_welcome_text(user_name, subgroup=None)
+
+        try:
+            with open(BANNERS["main"], "rb") as photo:
+                await context.bot.edit_message_media(
+                    chat_id=chat_id,
+                    message_id=menu_msg_id,
+                    media=InputMediaPhoto(media=photo, caption=welcome_text, parse_mode="Markdown"),
+                    reply_markup=get_main_keyboard(None)
+                )
+        except Exception:
+            with open(BANNERS["main"], "rb") as photo:
+                sent_msg = await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo,
+                    caption=welcome_text,
+                    parse_mode="Markdown",
+                    reply_markup=get_main_keyboard(None)
+                )
+            context.user_data["main_menu_msg_id"] = sent_msg.message_id
+        return
     # 1. Если админ отвечает на тикет
     if context.user_data.get("admin_replying_ticket"):
         target_ticket_id = context.user_data["admin_replying_ticket"]
@@ -1089,7 +1227,8 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 target_date = parsed_date.replace(year=today.year, tzinfo=TIMEZONE)
 
                 subgroup = context.user_data.get("subgroup")
-                schedule_text = get_schedule_for_date(DEFAULT_GROUP, target_date, subgroup=subgroup)
+                user_group = context.user_data.get("user_group") or DEFAULT_GROUP
+                schedule_text = get_schedule_for_date(user_group, target_date, subgroup=subgroup)
                 context.user_data["waiting_for_date"] = False
 
                 if len(schedule_text) > 1020:
