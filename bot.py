@@ -1026,53 +1026,54 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 await update.message.delete()
             except Exception:
                 pass
-        # Удаляем вопрос бота "Теперь введи пароль"
-        pwd_prompt_id = context.user_data.pop("portal_pwd_prompt_id", None)
-        if pwd_prompt_id:
+
+            # Удаляем вопрос бота "Теперь введи пароль"
+            pwd_prompt_id = context.user_data.pop("portal_pwd_prompt_id", None)
+            if pwd_prompt_id:
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=pwd_prompt_id)
+                except Exception:
+                    pass
+
+            check_msg = await context.bot.send_message(chat_id=chat_id, text="⏳ Проверяем данные на портале УрГЭУ...")
+
+            # Проверяем авторизацию через функцию из portal.py
+            success, msg = await check_portal_auth(login, password)
             try:
-                await context.bot.delete_message(chat_id=chat_id, message_id=pwd_prompt_id)
+                await check_msg.delete()
             except Exception:
                 pass
 
-        check_msg = await context.bot.send_message(chat_id=chat_id, text="⏳ Проверяем данные на портале УрГЭУ...")
+            if success:
+                enc_pw = encrypt_password(password)
+                context.user_data["portal_login"] = login
+                context.user_data["portal_password"] = enc_pw
+                context.user_data["waiting_for_portal_password"] = False
+                context.user_data.pop("temp_portal_login", None)
 
-        # Проверяем авторизацию через функцию из portal.py
-        success, msg = await check_portal_auth(login, password)
-        try:
-            await check_msg.delete()
-        except Exception:
-            pass
-
-        if success:
-            context.user_data["portal_login"] = login
-            context.user_data["portal_password"] = encrypt_password(password)
-            context.user_data["waiting_for_portal_password"] = False
-            context.user_data.pop("temp_portal_login", None)
-
-            # Формируем клавиатуру успеха
-            success_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📊 Посмотреть рейтинг", callback_data="portal_rating")],
-                [InlineKeyboardButton("👤 В профиль", callback_data="profile")]
-            ])
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="✅ *Портал УрГЭУ успешно привязан!*",
-                parse_mode="Markdown",
-                reply_markup=success_kb
-            )
-        else:
-            context.user_data["waiting_for_portal_password"] = False
-            fail_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Попробовать снова", callback_data="portal_bind")],
-                [InlineKeyboardButton("◀️ В профиль", callback_data="profile")]
-            ])
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"❌ *Ошибка входа:* {msg}",
-                parse_mode="Markdown",
-                reply_markup=fail_kb
-            )
-        return
+                ok_kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📊 Посмотреть рейтинг", callback_data="portal_rating")],
+                    [InlineKeyboardButton("👤 В профиль", callback_data="profile")]
+                ])
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="✅ *Портал УрГЭУ успешно привязан!*",
+                    parse_mode="Markdown",
+                    reply_markup=ok_kb
+                )
+                return
+            else:
+                fail_kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Попробовать снова", callback_data="portal_bind")],
+                    [InlineKeyboardButton("👤 В профиль", callback_data="profile")]
+                ])
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ *Ошибка входа:* {msg}",
+                    parse_mode="Markdown",
+                    reply_markup=fail_kb
+                )
+                return
     active_t = get_active_ticket(chat_id)
     now_str = datetime.now().strftime("%d.%m %H:%M")
 
