@@ -285,7 +285,7 @@ def get_profile_data(user_id: int, first_name: str) -> tuple[str, str | None]:
     notif_str = f"🟢 Включены ({notif_time})" if is_notif else "🔴 Выключены"
 
     # Кабинет учащегося (задел на будущее)
-    lk_status = "🟢 Подключен" if u_info.get("lk_connected") else "⚪ Не подключен *(скоро)*"
+    lk_status = "🟢 Подключен" if u_info.get("lk_connected") else "⚪ Не подключен"
 
     # Счетчик действий
     actions = u_info.get("actions_count", 1)
@@ -587,15 +587,27 @@ async def handle_callback(
         # --- БЛОК ПОРТАЛА УРГЭУ ---
     elif data == "portal_bind":
         context.user_data["waiting_for_portal_login"] = True
-        context.user_data["waiting_for_portal_password"] = False
 
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Отмена", callback_data="profile_menu")]])
-        await query.message.reply_text(
-            "🎓 *Привязка личного кабинета УрГЭУ*\n\n"
-            "Введи свой *ID пользователя* от портала (например: `m.m.samosadov`):",
+        # Отправляем карточку и запоминаем сообщение в переменную prompt_msg
+        prompt_msg = await query.message.reply_text(
+            "🎓 *Привязка личного кабинета УрГЭУ*\n\nВведи свой ID пользователя от портала (например: `m.m.samosadov`):",
             parse_mode="Markdown",
-            reply_markup=kb
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("◀️ Отмена", callback_data="portal_cancel")]
+            ])
         )
+        # Запоминаем ID этого сообщения, чтобы потом удалить
+        context.user_data["portal_prompt_msg_id"] = prompt_msg.message_id
+        return
+    elif data == "portal_cancel":
+        context.user_data["waiting_for_portal_login"] = False
+        context.user_data["waiting_for_portal_password"] = False
+        context.user_data.pop("portal_prompt_msg_id", None)
+        try:
+            # Удаляем карточку с вопросом
+            await query.message.delete()
+        except Exception:
+            pass
         return
 
     elif data == "portal_unbind":
@@ -978,41 +990,42 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         context.user_data["waiting_for_portal_login"] = False
         context.user_data["waiting_for_portal_password"] = True
 
-        # Удаляем сообщение пользователя с логином
+        # 1. Удаляем текстовое сообщение самого пользователя с логином
         try:
             await update.message.delete()
         except Exception:
             pass
 
-        # Удаляем предыдущий вопрос бота "Введи свой ID" (если он сохранен)
-        prev_prompt = context.user_data.pop("portal_prompt_msg_id", None)
-        if prev_prompt:
+        # 2. Удаляем карточку с вопросом "Введи свой ID пользователя"
+        prompt_id = context.user_data.pop("portal_prompt_msg_id", None)
+        if prompt_id:
             try:
-                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=prev_prompt)
+                await context.bot.delete_message(
+                    chat_id=update.effective_chat.id,
+                    message_id=prompt_id
+                )
             except Exception:
                 pass
 
-        # Отправляем вопрос пароля и запоминаем ID сообщения, чтобы потом стереть
-        pwd_prompt = await context.bot.send_message(
+        # 3. Отправляем запрос пароля и сохраняем его ID
+        pwd_msg = await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=f"Логин `{login}` принят.\n\nТеперь введи *пароль* от портала:\n_(Сообщение с паролем будет сразу же удалено в целях безопасности)_",
             parse_mode="Markdown"
         )
-        context.user_data["portal_pwd_prompt_id"] = pwd_prompt.message_id
+        context.user_data["portal_pwd_prompt_id"] = pwd_msg.message_id
         return
-
         # Ввод пароля от портала УрГЭУ
     if context.user_data.get("waiting_for_portal_password"):
-        password = update.message.text.strip()
-        login = context.user_data.get("temp_portal_login")
-        chat_id = update.effective_chat.id
+            password = update.message.text.strip()
+            login = context.user_data.get("temp_portal_login")
+            chat_id = update.effective_chat.id
 
-        # Удаляем сообщение с паролем из чата
-        try:
-            await update.message.delete()
-        except Exception:
-            pass
-
+            # Удаляем сообщение с паролем из чата
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
         # Удаляем вопрос бота "Теперь введи пароль"
         pwd_prompt_id = context.user_data.pop("portal_pwd_prompt_id", None)
         if pwd_prompt_id:
