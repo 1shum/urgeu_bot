@@ -981,6 +981,7 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # Ввод логина от портала УрГЭУ
     if context.user_data.get("waiting_for_portal_login"):
         login = update.message.text.strip()
+        context.user_data["temp_portal_login"] = login
         context.user_data["waiting_for_portal_login"] = False
         context.user_data["waiting_for_portal_password"] = True
 
@@ -1066,11 +1067,11 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 reply_markup=fail_kb
             )
         return
-        active_t = get_active_ticket(chat_id)
-        now_str = datetime.now().strftime("%d.%m %H:%M")
+    active_t = get_active_ticket(chat_id)
+    now_str = datetime.now().strftime("%d.%m %H:%M")
 
         if active_t:
-            # Дополняем существующий открытый тикет
+        # Дополняем существующий открытый тикет
             tickets = load_tickets()
             tickets[active_t["id"]]["messages"].append({
                 "sender": "user",
