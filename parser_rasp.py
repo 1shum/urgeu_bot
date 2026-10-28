@@ -219,4 +219,23 @@ def get_short_schedule_for_date(
     return "\n".join(lines)
 
 
+def check_group_exists(group_name: str) -> bool:
+    """
+    Проверяет, существует ли группа в УрГЭУ,
+    запрашивая расписание на текущую неделю.
+    """
+    try:
+        today = datetime.now()
+        start = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+        end = (today + timedelta(days=30)).strftime("%Y-%m-%d")
+        data = fetch_raw_schedule(group=group_name.strip(), start_date=start, end_date=end)
+
+        # Если API вернул непустой список дней или не пустой ответ
+        if data and isinstance(data, list) and len(data) > 0:
+            return True
+        return False
+    except Exception:
+        return False
+
+
 
