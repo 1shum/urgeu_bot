@@ -1074,6 +1074,44 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     reply_markup=fail_kb
                 )
                 return
+            # --- ОБРАБОТКА ДАТЫ ---
+    if context.user_data.get("waiting_for_date"):
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
+
+            menu_id = context.user_data.get("menu_message_id")
+
+            try:
+                today = datetime.now(TIMEZONE)
+                parsed_date = datetime.strptime(text, "%d.%m")
+                target_date = parsed_date.replace(year=today.year, tzinfo=TIMEZONE)
+
+                subgroup = context.user_data.get("subgroup")
+                schedule_text = get_schedule_for_date(DEFAULT_GROUP, target_date, subgroup=subgroup)
+                context.user_data["waiting_for_date"] = False
+
+                if len(schedule_text) > 1020:
+                    schedule_text = schedule_text[:1015] + "..."
+
+                banner_img = BANNERS.get("date") or BANNERS["main"]
+                with open(banner_img, "rb") as photo:
+                    await context.bot.edit_message_media(
+                        chat_id=chat_id,
+                        message_id=menu_id,
+                        media=InputMediaPhoto(media=photo, caption=schedule_text, parse_mode="Markdown"),
+                        reply_markup=SCHEDULE_KEYBOARD
+                    )
+            except ValueError:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="⚠️ Неверный формат даты! Введите дату в виде `ДД.ММ` (например, `21.11`):",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                print(f"Ошибка при обработке даты: {e}")
+            return
     active_t = get_active_ticket(chat_id)
     now_str = datetime.now().strftime("%d.%m %H:%M")
 
