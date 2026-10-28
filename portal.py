@@ -109,7 +109,7 @@ async def get_portal_rating(login: str, password: str) -> tuple[bool, str]:
                     return False, "Не удалось войти на портал."
 
             # 2. Получение страницы 'Сведения об обучении'
-            async with session.get(portal_page_url, allow_redirects=True) as resp:
+            async with session.get(portal_page_url, allow_redirects=True, proxy=PORTAL_PROXY) as resp:
                 if resp.status != 200:
                     return False, f"Ошибка загрузки страницы обучения: {resp.status}"
 
@@ -125,7 +125,7 @@ async def get_portal_rating(login: str, password: str) -> tuple[bool, str]:
                     tool_url = urljoin("https://portal.usue.ru", tool_url)
 
             # 3. Вход во фрейм
-            async with session.get(tool_url, allow_redirects=True) as tool_resp:
+            async with session.get(tool_url, allow_redirects=True, proxy=PORTAL_PROXY) as tool_resp:
                 base_tool_url = str(tool_resp.url)
                 tool_html = (await tool_resp.read()).decode("utf-8", errors="ignore")
 
@@ -151,7 +151,7 @@ async def get_portal_rating(login: str, password: str) -> tuple[bool, str]:
                 "X-Requested-With": "XMLHttpRequest"
             }
 
-            async with session.get(ajax_url, headers=ajax_headers, allow_redirects=True) as ajax_resp:
+            async with session.get(ajax_url, headers=ajax_headers, allow_redirects=True,proxy=PORTAL_PROXY) as ajax_resp:
                 ajax_raw = await ajax_resp.read()
                 response_text = ajax_raw.decode("utf-8", errors="ignore")
 
