@@ -609,54 +609,47 @@ async def handle_callback(
         return
 
     elif data == "portal_rating":
-
         login = context.user_data.get("portal_login")
-
         enc_pw = context.user_data.get("portal_password")
 
         if not login or not enc_pw:
             await query.answer("Сначала привяжи аккаунт портала!", show_alert=True)
-
             return
 
-        # Если кнопка нажата из карточки рейтинга ("Обновить"), редактируем ее.
-
-        #Если из профиля — шлем статусное сообщение.
-
-        is_updating = (query.message.text and "Рейтинг" in query.message.text) or "Обновление" in (query.message.text or "")
-
-        if is_updating:
-
+        prev_msg_text = query.message.text or ""
+        if "успешно привязан" in prev_msg_text:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            status_msg = await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="⏳ <b>Подключаюсь к порталу УрГЭУ и считаю баллы...</b>",
+                parse_mode="HTML"
+            )
+        elif "Рейтинг" in prev_msg_text or "академический" in prev_msg_text:
             status_msg = query.message
-
-            await status_msg.edit_text("⏳ *Обновляю баллы с портала УрГЭУ...*", parse_mode="Markdown")
-
+            await status_msg.edit_text("⏳ <b>Обновляю баллы с портала УрГЭУ...</b>", parse_mode="HTML")
         else:
-
-            status_msg = await query.message.reply_text("⏳ *Подключаюсь к порталу УрГЭУ и считаю баллы...*",
-                                                parse_mode="Markdown")
+            status_msg = await query.message.reply_text(
+                "⏳ <b>Подключаюсь к порталу УрГЭУ и считаю баллы...</b>",
+                parse_mode="HTML"
+            )
 
         try:
-
             raw_password = decrypt_password(enc_pw)
-
             success, text = await get_portal_rating(login, raw_password)
-
         except Exception as e:
-
             success, text = False, f"Ошибка дешифрования данных: {e}"
 
         kb = InlineKeyboardMarkup([
-
             [InlineKeyboardButton("🔄 Обновить", callback_data="portal_rating")],
-
             [InlineKeyboardButton("◀️ Закрыть рейтинг", callback_data="close_rating")]
-
         ])
 
-        await status_msg.edit_text(text, parse_mode="Markdown", reply_markup=kb)
-
+        await status_msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
         return
+
     elif data == "close_rating":
         try:
             await query.message.delete()
