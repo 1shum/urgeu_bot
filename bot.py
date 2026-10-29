@@ -1824,9 +1824,12 @@ def main() -> None:
         .build()
     )
 
-    if app.job_queue:
-        app.job_queue.run_repeating(send_daily_notifications, interval=60, first=10)
-        app.job_queue.run_repeating(sync_backup_to_telegram, interval=900, first=30)
+    try:
+        if app.job_queue:
+            app.job_queue.run_repeating(send_daily_notifications, interval=60, first=10)
+            app.job_queue.run_repeating(sync_backup_to_telegram, interval=900, first=30)
+    except Exception as e:
+        print(f"[WARN] Не удалось запустить фоновые задачи: {e}")
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("admin", admin_command))
