@@ -1462,8 +1462,11 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
             if success:
                 enc_pw = encrypt_password(password)
-                context.user_data["portal_login"] = login
-                context.user_data["portal_password"] = enc_pw
+                users = load_json(USERS_FILE)
+                user_entry = users.setdefault(str(chat_id), {})
+                user_entry["portal_login"] = login
+                user_entry["portal_password"] = enc_pw
+                save_json(USERS_FILE, users)
                 context.user_data["waiting_for_portal_password"] = False
                 context.user_data.pop("temp_portal_login", None)
 
