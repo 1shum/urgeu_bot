@@ -585,7 +585,7 @@ async def handle_callback(
         buttons = [
             [InlineKeyboardButton("📝 Дедлайны (портал)", callback_data="deadline_hub")],
             [InlineKeyboardButton("🎓 Уведомления о парах", callback_data="pairs_notif_menu")],
-            [InlineKeyboardButton("🔙 В главное меню", callback_data="back_to_main")]
+            [InlineKeyboardButton("🔙 В главное меню", callback_data="main_menu")]
         ]
         with open(BANNERS["main"], "rb") as photo:
             await query.edit_message_media(
@@ -690,40 +690,71 @@ async def handle_callback(
 
         # Просмотр списка актуальных дедлайнов прямо из бота
     # Просмотр списка актуальных дедлайнов прямо из бота
+    # Просмотр списка актуальных дедлайнов
     if data == "show_deadlines_list":
         users = load_json(USERS_FILE)
         user = users.get(str(chat_id), {})
-        if not user.get("portal_login") or not user.get("portal_password"):
+        login = user.get("portal_login")
+        enc_pw = user.get("portal_password")
+
+        if not login or not enc_pw:
             await query.answer("Сначала привяжи портал в Личном кабинете!", show_alert=True)
             return
 
-        await query.answer("Сканирую портал... ⏳")
-        deadlines = await fetch_portal_deadlines(user["portal_login"], decrypt_password(user["portal_password"]))
+        # Мгновенный отклик интерфейса
+        loading_text = (
+            "⏳ **Сканирую портал УрГЭУ...**\n"
+            "─\n"
+            "Проверяю учебные курсы, тесты и задания.\nЭто займет около 3-5 секунд..."
+        )
+        with open(BANNERS["main"], "rb") as photo:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=photo, caption=loading_text, parse_mode="Markdown"),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏳ Загрузка...", callback_data="none")]])
+            )
 
-        if not deadlines:
-            text = "🎉 **Горящих дедлайнов нет!**\nВсе тесты и задания сданы."
-        else:
-            text = "📋 **АКТИВНЫЕ ДЕДЛАЙНЫ С ПОРТАЛА:**\n─\n"
-            now = datetime.now()
-            for d in deadlines:
-                diff = datetime.fromisoformat(d["deadline_iso"]) - now
-                days = diff.days
-                hours = int(diff.seconds // 3600)
-                left_str = f"{days} дн. {hours} ч." if days > 0 else f"{hours} ч."
-                icon = "🧪" if d["type"] == "Тест" else "📝"
-                text += f"{icon} **{d['type']}: {d['title']}**\n📚 _{d['course']}_\n⏳ Срок: `{d['deadline_str']}` (осталось: {left_str})\n\n"
+        try:
+            raw_password = decrypt_password(enc_pw)
+            deadlines = await fetch_portal_deadlines(login, raw_password)
 
-        buttons = [
-            [InlineKeyboardButton("🔄 Обновить", callback_data="show_deadlines_list")],
-            [InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")]
-        ]
+            if not deadlines:
+                text = (
+                    "🎉 **Горящих дедлайнов нет!**\n"
+                    "─\n"
+                    "Все тесты и задания сданы или преподаватели ещё не выложили новые работы."
+                )
+            else:
+                text = "📋 **АКТИВНЫЕ ДЕДЛАЙНЫ С ПОРТАЛА:**\n─\n"
+                now = datetime.now()
+                for d in deadlines:
+                    diff = datetime.fromisoformat(d["deadline_iso"]) - now
+                    days = diff.days
+                    hours = int(diff.seconds // 3600)
+                    left_str = f"{days} дн. {hours} ч." if days > 0 else f"{hours} ч."
+                    icon = "🧪" if d["type"] == "Тест" else "📝"
+                    text += (
+                        f"{icon} **{d['type']}: {d['title']}**\n"
+                        f"📚 _{d['course']}_\n"
+                        f"⏳ Срок: `{d['deadline_str']}` (осталось: *{left_str}*)\n\n"
+                    )
+
+            buttons = [
+                [InlineKeyboardButton("🔄 Обновить", callback_data="show_deadlines_list")],
+                [InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")]
+            ]
+        except Exception as err:
+            text = f"❌ **Ошибка при получении дедлайнов:**\n`{err}`"
+            buttons = [
+                [InlineKeyboardButton("🔄 Попробовать снова", callback_data="show_deadlines_list")],
+                [InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")]
+            ]
+
         with open(BANNERS["main"], "rb") as photo:
             await query.edit_message_media(
                 media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
         return
-
     # 4. Главное меню
         # Личный кабинет
     if data == "profile_menu":
