@@ -514,6 +514,7 @@ async def handle_callback(
         pass
 
     data = query.data
+    print(f"[DEBUG CALLBACK RECEIVED]: '{data}'")
     chat_id = query.message.chat_id
     today = datetime.now(TIMEZONE)
     subgroup = context.user_data.get("subgroup")
