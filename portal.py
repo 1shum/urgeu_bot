@@ -80,7 +80,7 @@ async def check_portal_auth(login: str, password: str) -> tuple[bool, str]:
             return False, f"Ошибка сети при подключении к порталу: {e}"
 
 
-async def get_portal_rating(login: str, password: str) -> tuple[bool, str]:
+async def get_portal_rating(login: str, password: str) -> tuple:
     """
     Авторизуется на портале, переключает Wicket на 'Рейтинг'
     и собирает лаконичный список дисциплин и процентов.
@@ -104,13 +104,13 @@ async def get_portal_rating(login: str, password: str) -> tuple[bool, str]:
             # 1. Логин
             async with session.post(PORTAL_LOGIN_URL, data=payload, allow_redirects=True, proxy=PORTAL_PROXY) as resp:
                 if resp.status != 200:
-                    return False, "Не удалось войти на портал."
+                    return False, "Не удалось войти на портал.", {}
 
             # 2. Переходим на главную страницу студента, чтобы узнать его личный URL страницы обучения
             home_url = f"https://portal.usue.ru/portal/site/~{login}"
             async with session.get(home_url, allow_redirects=True, proxy=PORTAL_PROXY) as resp:
                 if resp.status != 200:
-                    return False, f"Ошибка загрузки личного кабинета: {resp.status}"
+                    return False, f"Ошибка загрузки личного кабинета: {resp.status}", {}
                 raw_home = await resp.read()
                 soup_home = BeautifulSoup(raw_home.decode("utf-8", errors="ignore"), "html.parser")
 
@@ -130,7 +130,7 @@ async def get_portal_rating(login: str, password: str) -> tuple[bool, str]:
             # Загружаем найденную страницу с оценками
             async with session.get(target_url, allow_redirects=True, proxy=PORTAL_PROXY) as resp:
                 if resp.status != 200:
-                    return False, f"Ошибка загрузки страницы обучения: {resp.status}"
+                    return False, f"Ошибка загрузки страницы обучения: {resp.status}", {}
                 raw = await resp.read()
                 soup_main = BeautifulSoup(raw.decode("utf-8", errors="ignore"), "html.parser")
 
@@ -185,37 +185,46 @@ async def get_portal_rating(login: str, password: str) -> tuple[bool, str]:
             all_divs = [d.get_text(strip=True) for d in final_soup.find_all("div") if d.get_text(strip=True)]
 
             rating_items = []
+            grades_dict = {}
+
             for i, text in enumerate(all_divs):
                 if text.startswith("Рейтинг текущий -"):
-                    # Вытаскиваем процент
                     percent_raw = text.replace("Рейтинг текущий -", "").strip()
+
+                    val_clean = percent_raw.replace("%", "").replace(",", ".").strip()
+                    grade_val = None
+                    try:
+                        grade_val = float(val_clean)
+                    except ValueError:
+                        pass
+
                     if "%" in percent_raw:
                         percent_str = percent_raw
                     else:
                         percent_str = "нет баллов"
 
-                    # Предмет находится на 2 позиции выше (перед Преподавателем)
                     subject_name = "Предмет"
                     if i >= 2:
                         possible_subj = all_divs[i - 2]
-                        # Проверяем, что это не ФИО студента и не дата
-                        if not any(skip in possible_subj.lower() for skip in ["текущий рейтинг", "преподаватель", "семестр"]):
+                        if not any(skip in possible_subj.lower() for skip in
+                                   ["текущий рейтинг", "преподаватель", "семестр"]):
                             subject_name = possible_subj
-                        elif i >= 1 and not any(
-                                skip in all_divs[i - 1] for skip in ["Преподаватель", "Текущий рейтинг"]):
+                    elif i >= 1:
+                        if not any(skip in all_divs[i - 1].lower() for skip in ["преподаватель", "текущий рейтинг"]):
                             subject_name = all_divs[i - 1]
 
-                    # Сокращаем длинное название физкультуры для красоты
                     if "Элективные курсы по физической культуре" in subject_name:
                         subject_name = "Физическая культура"
 
-                    rating_items.append(f"• <b>{subject_name}</b> — <code>{percent_str}</code>")
+                    if grade_val is not None:
+                        grades_dict[subject_name] = grade_val
+
+                    rating_items.append({"name": subject_name, "raw_str": percent_str, "val": grade_val})
 
             if not rating_items:
-                return False, "Не удалось распознать баллы. Попробуйте позже."
+                return False, "Не удалось распознать баллы. Попробуйте позже.", {}
 
-            result_text = "📊 <b>Текущий академический рейтинг:</b>\n\n" + "\n".join(rating_items)
-            return True, result_text
+            return True, rating_items, grades_dict
 
         except Exception as e:
-            return False, f"Ошибка при получении рейтинга: {e}"
+            return False, f"Ошибка при получении рейтинга: {e}", {}

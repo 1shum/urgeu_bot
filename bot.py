@@ -751,16 +751,47 @@ async def handle_callback(
                 "⏳ <b>Подключаюсь к порталу УрГЭУ и считаю баллы...</b>",
                 parse_mode="HTML"
             )
-
+            
         try:
             raw_password = decrypt_password(enc_pw)
-            success, text = await get_portal_rating(login, raw_password)
+            success, rating_data, grades_dict = await get_portal_rating(login, raw_password)
         except Exception as e:
-            success, text = False, f"Ошибка дешифрования данных: {e}"
+            success, rating_data, grades_dict = False, f"Ошибка дешифрования данных: {e}", {}
+
+        if success:
+            users = load_json(USERS_FILE)
+            uid = str(query.from_user.id)
+            prev_grades = users.get(uid, {}).get("last_rating", {})
+
+            lines = ["<b>Текущий академический рейтинг:</b>\n"]
+            for item in rating_data:
+                subj = item["name"]
+                curr_val = item["val"]
+                curr_str = item["raw_str"]
+
+                delta_text = ""
+                if curr_val is not None and subj in prev_grades:
+                    prev_val = prev_grades[subj]
+                    diff = round(curr_val - prev_val, 2)
+                    if diff > 0:
+                        delta_text = f" (📈 +{diff}%)"
+                    elif diff < 0:
+                        delta_text = f" (📉 {diff}%)"
+
+                lines.append(f"• <b>{subj}</b> — <code>{curr_str}</code>{delta_text}")
+
+            text = "\n".join(lines)
+
+            # Сохраняем свежие баллы в базу для следующего сравнения
+            if uid in users:
+                users[uid]["last_rating"] = grades_dict
+                save_json(USERS_FILE, users)
+        else:
+            text = str(rating_data)
 
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Обновить", callback_data="portal_rating")],
-            [InlineKeyboardButton("◀️ Закрыть рейтинг", callback_data="close_rating")]
+            [InlineKeyboardButton("✖️ Закрыть рейтинг", callback_data="close_rating")]
         ])
 
         await status_msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
