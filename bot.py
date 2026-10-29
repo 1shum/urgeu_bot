@@ -755,15 +755,28 @@ async def handle_callback(
                 text = "📋 **АКТИВНЫЕ ДЕДЛАЙНЫ С ПОРТАЛА:**\n─\n"
                 now = datetime.now()
                 for d in deadlines:
-                    diff = datetime.fromisoformat(d["deadline_iso"]) - now
-                    days = diff.days
-                    hours = int(diff.seconds // 3600)
-                    left_str = f"{days} дн. {hours} ч." if days > 0 else f"{hours} ч."
-                    icon = "🧪" if d["type"] == "Тест" else "📝"
+                    c_name = d.get("course", "Курс")
+                    t_name = d.get("title", "Работа")
+                    t_type = d.get("type", "Тест")
+                    d_str = d.get("deadline_str") or d.get("raw_date", "Срок не указан")
+
+                    left_str = ""
+                    iso_val = d.get("deadline_iso")
+                    if iso_val:
+                        try:
+                            dt = datetime.fromisoformat(iso_val)
+                            diff = dt - now
+                            days = diff.days
+                            hours = int(diff.seconds // 3600)
+                            left_str = f" (осталось: *{days} дн. {hours} ч.*)" if days > 0 else f" (осталось: *{hours} ч.*)"
+                        except Exception:
+                            pass
+
+                    icon = "🧪" if "тест" in t_type.lower() else "📝"
                     text += (
-                        f"{icon} **{d['type']}: {d['title']}**\n"
-                        f"📚 _{d['course']}_\n"
-                        f"⏳ Срок: `{d['deadline_str']}` (осталось: *{left_str}*)\n\n"
+                        f"{icon} **{t_type}: {t_name}**\n"
+                        f"📚 _{c_name}_\n"
+                        f"⏳ Срок: `{d_str}`{left_str}\n\n"
                     )
 
             buttons = [
