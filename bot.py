@@ -657,12 +657,43 @@ async def handle_callback(
                 return
             except BadRequest:
                 pass
-
         with open(BANNERS["main"], "rb") as photo:
-            await query.edit_message_media(
-                media=InputMediaPhoto(media=photo, caption=prof_text, parse_mode="Markdown"),
-                reply_markup=reply_markup,
-            )
+            try:
+                # Если сообщение уже с фото — просто обновляем медиа и текст
+                await query.edit_message_media(
+                    media=InputMediaPhoto(media=photo, caption=prof_text, parse_mode="Markdown"),
+                    reply_markup=reply_markup,
+                )
+            except Exception:
+                # Если кнопка была нажата на обычном тексте (например, после привязки):
+                # удаляем текстовое уведомление, чтобы не дублировать меню
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                # И обновляем/отправляем профиль в исходное меню
+                menu_msg_id = context.user_data.get("menu_message_id")
+                if menu_msg_id:
+                    try:
+                        photo.seek(0)
+                        await context.bot.edit_message_media(
+                            chat_id=chat_id,
+                            message_id=menu_msg_id,
+                            media=InputMediaPhoto(media=photo, caption=prof_text, parse_mode="Markdown"),
+                            reply_markup=reply_markup
+                        )
+                        return
+                    except Exception:
+                        pass
+                photo.seek(0)
+                sent = await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo,
+                    caption=prof_text,
+                    parse_mode="Markdown",
+                    reply_markup=reply_markup
+                )
+                context.user_data["menu_message_id"] = sent.message_id
         return
         # --- БЛОК ПОРТАЛА УРГЭУ ---
     elif data == "portal_bind":
