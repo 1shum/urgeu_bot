@@ -693,21 +693,19 @@ async def handle_callback(
     # Просмотр списка актуальных дедлайнов
     if data == "show_deadlines_list":
         # 1. Проверяем данные в памяти context.user_data
-        login = context.user_data.get("portal_login")
-        raw_password = context.user_data.get("portal_password")
+        # 1. Достаем учетные данные пользователя из users.json
+        users = load_json(USERS_FILE)
+        user = users.get(str(chat_id), {})
+        login = user.get("portal_login") or context.user_data.get("portal_login")
+        enc_pw = user.get("portal_password") or context.user_data.get("portal_password")
 
-        # 2. Если в памяти нет, проверяем базу users.json
-        if not login or not raw_password:
-            users = load_json(USERS_FILE)
-            user = users.get(str(chat_id), {})
-            login = user.get("portal_login")
-            enc_pw = user.get("portal_password")
-            if enc_pw:
-                try:
-                    raw_password = decrypt_password(enc_pw)
-                except Exception:
-                    raw_password = None
-
+        raw_password = None
+        if enc_pw:
+            try:
+                # Расшифровываем Fernet-токен в чистый пароль
+                raw_password = decrypt_password(enc_pw)
+            except Exception:
+                raw_password = enc_pw
         if not login or not raw_password:
             warn_text = (
                 "⚠️ **Портал не привязан!**\n\n"
