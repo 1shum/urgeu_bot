@@ -231,29 +231,42 @@ async def get_portal_rating(login: str, password: str) -> tuple:
 from datetime import datetime
 from urllib.parse import urljoin
 
-def parse_deadline(date_str):
+ru_months = {
+    "янв": "01", "фев": "02", "мар": "03", "апр": "04",
+    "май": "05", "мая": "05", "июн": "06", "июл": "07",
+    "авг": "08", "сен": "09", "окт": "10", "ноя": "11", "дек": "12"
+}
+
+
+def parse_deadline(date_str: str):
     if not date_str:
         return None
-    try:
-        return datetime.strptime(date_str.strip(), "%d.%m.%Y %H:%M")
-    except Exception:
-        pass
+    cleaned = date_str.strip()
 
-    ru_months = {
-        "янв": "01", "фев": "02", "мар": "03", "апр": "04",
-        "май": "05", "июн": "06", "июл": "07", "авг": "08",
-        "сен": "09", "окт": "10", "ноя": "11", "дек": "12"
-    }
-    cleaned = date_str.strip().lower()
+    # Заменяем русские месяцы на номера
     for ru, num in ru_months.items():
-        if f"-{ru}-" in cleaned:
-            cleaned = cleaned.replace(f"-{ru}-", f"-{num}-")
+        if f"-{ru}-" in cleaned.lower():
+            import re
+            cleaned = re.sub(f"-{ru}-", f"-{num}-", cleaned, flags=re.IGNORECASE)
             break
-    try:
-        return datetime.strptime(cleaned, "%Y-%m-%d %I:%M:%S %p")
-    except Exception:
-        return None
 
+    # Пробуем форматы даты с портала
+    formats = [
+        "%Y-%m-%d %I:%M:%S %p",
+        "%Y-%m-%d %I:%M %p",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%d.%m.%Y %H:%M",
+        "%d.%m.%Y %H:%M:%S",
+        "%d.%m.%Y"
+    ]
+    for fmt in formats:
+        try:
+            return datetime.strptime(cleaned, fmt)
+        except Exception:
+            pass
+
+    return None
 async def fetch_portal_deadlines(login, password):
     base_url = "https://portal.usue.ru"
     login_url = f"{base_url}/portal/xlogin"
