@@ -698,21 +698,40 @@ async def handle_callback(
         enc_pw = user.get("portal_password")
 
         if not login or not enc_pw:
-            await query.answer("Сначала привяжи портал в Личном кабинете!", show_alert=True)
+            # Предупреждаем пользователя прямо в сообщении
+            warn_text = (
+                "⚠️ **Портал не привязан!**\n\n"
+                "Чтобы просматривать задания и тесты, перейди в **Личный кабинет** и укажи логин и пароль от портала УрГЭУ."
+            )
+            buttons = [
+                [InlineKeyboardButton("👤 В Личный кабинет", callback_data="profile_menu")],
+                [InlineKeyboardButton("🔙 Назад", callback_data="deadline_hub")]
+            ]
+            with open(BANNERS["main"], "rb") as photo:
+                await query.edit_message_media(
+                    media=InputMediaPhoto(media=photo, caption=warn_text, parse_mode="Markdown"),
+                    reply_markup=InlineKeyboardMarkup(buttons),
+                )
             return
 
-        # Мгновенный отклик интерфейса
+        # 1. Показываем плашку загрузки
         loading_text = (
             "⏳ **Сканирую портал УрГЭУ...**\n"
             "─\n"
-            "Проверяю учебные курсы, тесты и задания.\nЭто займет около 3-5 секунд..."
+            "Проверяю 12 учебных курсов на наличие тестов и заданий.\n"
+            "Пожалуйста, подожди несколько секунд..."
         )
-        with open(BANNERS["main"], "rb") as photo:
-            await query.edit_message_media(
-                media=InputMediaPhoto(media=photo, caption=loading_text, parse_mode="Markdown"),
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏳ Загрузка...", callback_data="none")]])
-            )
+        try:
+            with open(BANNERS["main"], "rb") as photo:
+                await query.edit_message_media(
+                    media=InputMediaPhoto(media=photo, caption=loading_text, parse_mode="Markdown"),
+                    reply_markup=InlineKeyboardMarkup(
+                        [[InlineKeyboardButton("⏳ Загрузка данных...", callback_data="none")]])
+                )
+        except Exception as e:
+            print(f"[ERROR] Не удалось показать экран загрузки: {e}")
 
+        # 2. Запрашиваем данные с портала
         try:
             raw_password = decrypt_password(enc_pw)
             deadlines = await fetch_portal_deadlines(login, raw_password)
@@ -743,7 +762,8 @@ async def handle_callback(
                 [InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")]
             ]
         except Exception as err:
-            text = f"❌ **Ошибка при получении дедлайнов:**\n`{err}`"
+            print(f"[ERROR] Ошибка сбора дедлайнов: {err}")
+            text = f"❌ **Ошибка при обращении к порталу:**\n`{err}`"
             buttons = [
                 [InlineKeyboardButton("🔄 Попробовать снова", callback_data="show_deadlines_list")],
                 [InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")]
