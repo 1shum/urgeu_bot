@@ -815,8 +815,13 @@ async def handle_callback(
         user_group = context.user_data.get("user_group", "Не выбрана")
         prof_text, avatar_id = get_profile_data(chat_id, query.from_user.first_name, user_group=user_group)
 
-        # Проверяем, привязан ли портал у пользователя
-        is_linked = bool(context.user_data.get("portal_login") and context.user_data.get("portal_password"))
+        # 1. ЧИТАЕМ СТАТУС ПОРТАЛА ИЗ БАЗЫ USERS.JSON (и из памяти как резерв)
+        users = load_json(USERS_FILE)
+        user_entry = users.get(str(chat_id), {})
+        db_login = user_entry.get("portal_login") or context.user_data.get("portal_login")
+        db_pw = user_entry.get("portal_password") or context.user_data.get("portal_password")
+
+        is_linked = bool(db_login and db_pw)
         reply_markup = get_profile_keyboard(is_linked)
 
         if avatar_id:
@@ -1467,6 +1472,10 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 user_entry["portal_login"] = login
                 user_entry["portal_password"] = enc_pw
                 save_json(USERS_FILE, users)
+
+                # Дублируем данные в оперативную память для моментального отклика
+                context.user_data["portal_login"] = login
+                context.user_data["portal_password"] = enc_pw
                 context.user_data["waiting_for_portal_password"] = False
                 context.user_data.pop("temp_portal_login", None)
 
@@ -1839,7 +1848,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.PHOTO, handle_user_photo))
 
     print("✅ Бот успешно запущен и ожидает сообщений!")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
