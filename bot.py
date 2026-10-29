@@ -332,7 +332,7 @@ def get_profile_data(user_id: int, first_name: str, user_group: str = "Не вы
     notif_str = f"🟢 Включены ({notif_time})" if is_notif else "🔴 Выключены"
 
     # Кабинет учащегося (задел на будущее)
-    lk_status = "🟢 Подключен" if u_info.get("lk_connected") else "⚪ Не подключен"
+    lk_status = "🟢 Подключен" if u_info.get("portal_login") else "⚪ Не подключен"
 
     # Счетчик действий
     actions = u_info.get("actions_count", 1)
@@ -692,8 +692,8 @@ async def handle_callback(
         # Просмотр списка актуальных дедлайнов прямо из бота
     # Просмотр списка актуальных дедлайнов прямо из бота
     # Просмотр списка актуальных дедлайнов
+    # Просмотр списка актуальных дедлайнов
     if data == "show_deadlines_list":
-        # 1. Проверяем данные в памяти context.user_data
         # 1. Достаем учетные данные пользователя из users.json
         users = load_json(USERS_FILE)
         user = users.get(str(chat_id), {})
@@ -707,6 +707,7 @@ async def handle_callback(
                 raw_password = decrypt_password(enc_pw)
             except Exception:
                 raw_password = enc_pw
+
         if not login or not raw_password:
             warn_text = (
                 "⚠️ **Портал не привязан!**\n\n"
@@ -738,71 +739,72 @@ async def handle_callback(
                 )
         except Exception as e:
             print(f"[ERROR] Не удалось показать экран загрузки: {e}")
-            # 3. Запрашиваем данные с портала
-            try:
-                deadlines = await fetch_portal_deadlines(login, raw_password)
 
-                if not deadlines:
-                    text = (
-                        "🎉 **Горящих дедлайнов нет!**\n"
-                        "─\n"
-                        "Все тесты и задания сданы или преподаватели ещё не выложили новые работы."
-                    )
-                else:
-                    text = "📋 АКТИВНЫЕ ДЕДЛАЙНЫ С ПОРТАЛА:\n" + ("─" * 28) + "\n\n"
-                    now = datetime.now()
-                    for d in deadlines:
-                        c_name = d.get("course", "Курс")
-                        t_name = d.get("title", "Работа")
-                        t_type = d.get("type", "Тест")
-                        d_str = d.get("deadline_str") or d.get("raw_date", "Срок не указан")
+        # 3. Запрашиваем данные с портала (ТЕПЕРЬ ВНЕ БЛОКА EXCEPT)
+        try:
+            deadlines = await fetch_portal_deadlines(login, raw_password)
 
-                        left_str = ""
-                        iso_val = d.get("deadline_iso")
-                        if iso_val:
-                            try:
-                                dt = datetime.fromisoformat(iso_val)
-                                diff = dt - now
-                                days = diff.days
-                                hours = int(diff.seconds // 3600)
-                                left_str = f" (осталось: {days} дн. {hours} ч.)" if days > 0 else f" (осталось: {hours} ч.)"
-                            except Exception:
-                                pass
-
-                        icon = "🧪" if "тест" in t_type.lower() else "📝"
-                        text += (
-                            f"{icon} [{t_type}] {t_name}\n"
-                            f"📚 {c_name}\n"
-                            f"⏳ Срок: {d_str}{left_str}\n\n"
-                        )
-
-                buttons = [
-                    [InlineKeyboardButton("🔄 Обновить", callback_data="show_deadlines_list")],
-                    [InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")]
-                ]
-
-            except Exception as err:
-                print(f"[ERROR] Ошибка сбора дедлайнов: {err}")
-                text = f"❌ Ошибка при обращении к порталу:\n{err}"
-                buttons = [
-                    [InlineKeyboardButton("🔄 Попробовать снова", callback_data="show_deadlines_list")],
-                    [InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")]
-                ]
-
-            if len(text) > 1000:
-                await query.message.delete()
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=text[:4000],
-                    reply_markup=InlineKeyboardMarkup(buttons)
+            if not deadlines:
+                text = (
+                    "🎉 **Горящих дедлайнов нет!**\n"
+                    "─\n"
+                    "Все тесты и задания сданы или преподаватели ещё не выложили новые работы."
                 )
             else:
-                with open(BANNERS["main"], "rb") as photo:
-                    await query.edit_message_media(
-                        media=InputMediaPhoto(media=photo, caption=text),
-                        reply_markup=InlineKeyboardMarkup(buttons)
+                text = "📋 АКТИВНЫЕ ДЕДЛАЙНЫ С ПОРТАЛА:\n" + ("─" * 28) + "\n\n"
+                now = datetime.now()
+                for d in deadlines:
+                    c_name = d.get("course", "Курс")
+                    t_name = d.get("title", "Работа")
+                    t_type = d.get("type", "Тест")
+                    d_str = d.get("deadline_str") or d.get("raw_date", "Срок не указан")
+
+                    left_str = ""
+                    iso_val = d.get("deadline_iso")
+                    if iso_val:
+                        try:
+                            dt = datetime.fromisoformat(iso_val)
+                            diff = dt - now
+                            days = diff.days
+                            hours = int(diff.seconds // 3600)
+                            left_str = f" (осталось: {days} дн. {hours} ч.)" if days > 0 else f" (осталось: {hours} ч.)"
+                        except Exception:
+                            pass
+
+                    icon = "🧪" if "тест" in t_type.lower() else "📝"
+                    text += (
+                        f"{icon} [{t_type}] {t_name}\n"
+                        f"📚 {c_name}\n"
+                        f"⏳ Срок: {d_str}{left_str}\n\n"
                     )
-            return
+
+            buttons = [
+                [InlineKeyboardButton("🔄 Обновить", callback_data="show_deadlines_list")],
+                [InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")]
+            ]
+
+        except Exception as err:
+            print(f"[ERROR] Ошибка сбора дедлайнов: {err}")
+            text = f"❌ Ошибка при обращении к порталу:\n{err}"
+            buttons = [
+                [InlineKeyboardButton("🔄 Попробовать снова", callback_data="show_deadlines_list")],
+                [InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")]
+            ]
+
+        if len(text) > 1000:
+            await query.message.delete()
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text[:4000],
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+        else:
+            with open(BANNERS["main"], "rb") as photo:
+                await query.edit_message_media(
+                    media=InputMediaPhoto(media=photo, caption=text),
+                    reply_markup=InlineKeyboardMarkup(buttons)
+                )
+        return
     # 4. Главное меню
         # Личный кабинет
     if data == "profile_menu":
