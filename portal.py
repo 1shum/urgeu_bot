@@ -286,8 +286,9 @@ async def fetch_portal_deadlines(login, password):
     now = datetime.now()
 
     try:
-        async with aiohttp.ClientSession(headers=headers, connector=connector, cookie_jar=jar) as session:
-            await session.get(f"{base_url}/portal")
+        timeout = aiohttp.ClientTimeout(total=20)
+        async with aiohttp.ClientSession(headers=headers, connector=connector, cookie_jar=jar, timeout=timeout) as session:
+            # 1. Авторизация
             login_res = await session.post(login_url, data=login_data, allow_redirects=True)
             portal_html = await login_res.text()
 
@@ -299,13 +300,16 @@ async def fetch_portal_deadlines(login, password):
                 title = a.get_text(strip=True)
                 if not title or title.lower() in ignore_titles:
                     continue
-                if "~" in raw_href or "!gateway" in raw_href:
+                if "~" in raw_href or "gateway" in raw_href:
                     continue
                 if "/portal/site/" in raw_href:
                     full_url = urljoin(base_url, raw_href)
                     if not any(c["url"] == full_url for c in courses):
                         courses.append({"title": title, "url": full_url})
 
+            print(f"[DEBUG DEADLINES] Найдено курсов: {len(courses)}")
+
+            # 2. Обход курсов
             for c in courses:
                 try:
                     async with session.get(c["url"]) as resp:
@@ -320,7 +324,7 @@ async def fetch_portal_deadlines(login, password):
                     href = urljoin(base_url, a["href"].strip())
                     if "задания" in text and "/portal/site/" in href:
                         tool_links["tasks"] = href
-                    elif ("тесты" in text or "экзамены" in text) and "/portal/site/" in href:
+                    elif ("тесты" in text or "экзамен" in text) and "/portal/site/" in href:
                         tool_links["tests"] = href
 
                 for tool_type, tool_url in tool_links.items():
@@ -339,43 +343,48 @@ async def fetch_portal_deadlines(login, password):
 
                         f_soup = BeautifulSoup(frame_html, "html.parser")
 
+                        # Парсинг заданий
                         if tool_type == "tasks":
                             for tr in f_soup.find_all("tr"):
                                 cols = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
                                 if len(cols) >= 4 and cols[0] != "Название приложения":
-                                    title, status, deadline_raw = cols[0], cols[1], cols[3]
+                                    title_t, status, deadline_raw = cols[0], cols[1], cols[3]
                                     if "сдано" not in status.lower():
                                         dt = parse_deadline(deadline_raw)
-                                        if dt and dt > now:
+                                        # Если дата успешно распарсилась и она еще впереди (или парсер вернул объект)
+                                        if dt is None or dt > now:
                                             results.append({
-                                                "id": f"task_{title}_{deadline_raw}",
+                                                "id": f"task_{title_t}_{deadline_raw}",
                                                 "course": c["title"],
                                                 "type": "Задание",
-                                                "title": title,
-                                                "deadline_iso": dt.isoformat(),
+                                                "title": title_t,
+                                                "deadline_iso": dt.isoformat() if dt else now.isoformat(),
                                                 "deadline_str": deadline_raw,
-                                                "timestamp": dt.timestamp()
+                                                "timestamp": dt.timestamp() if dt else now.timestamp()
                                             })
+
+                        # Парсинг тестов
                         elif tool_type == "tests":
                             for tr in f_soup.find_all("tr"):
                                 cols = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
                                 if len(cols) >= 3 and cols[0] not in ["Название", "Пройти тест"]:
-                                    title, deadline_raw = cols[0], cols[2]
+                                    title_t, deadline_raw = cols[0], cols[2]
                                     dt = parse_deadline(deadline_raw)
-                                    if dt and dt > now:
+                                    if dt is None or dt > now:
                                         results.append({
-                                            "id": f"test_{title}_{deadline_raw}",
+                                            "id": f"test_{title_t}_{deadline_raw}",
                                             "course": c["title"],
                                             "type": "Тест",
-                                            "title": title,
-                                            "deadline_iso": dt.isoformat(),
+                                            "title": title_t,
+                                            "deadline_iso": dt.isoformat() if dt else now.isoformat(),
                                             "deadline_str": deadline_raw,
-                                            "timestamp": dt.timestamp()
+                                            "timestamp": dt.timestamp() if dt else now.timestamp()
                                         })
                     except Exception:
                         pass
-    except Exception as e:
-        print(f"Ошибка при сборе дедлайнов: {e}")
 
-    results.sort(key=lambda x: x["timestamp"])
+    except Exception as e:
+        print(f"[ERROR при сборе дедлайнов]: {e}")
+
+    print(f"[DEBUG TOTAL RESULTS]: Собрано {len(results)} дедлайнов")
     return results
