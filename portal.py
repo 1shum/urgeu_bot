@@ -289,7 +289,8 @@ async def fetch_portal_deadlines(login, password):
 
     try:
         timeout = aiohttp.ClientTimeout(total=20)
-        async with aiohttp.ClientSession(headers=headers, connector=connector, cookie_jar=jar, timeout=timeout) as session:
+        async with aiohttp.ClientSession(headers=headers, connector=connector, cookie_jar=jar,
+                                         timeout=timeout) as session:
             # 1. Авторизация
             login_res = await session.post(login_url, data=login_data, allow_redirects=True, proxy=PORTAL_PROXY)
             portal_html = await login_res.text()
@@ -349,37 +350,53 @@ async def fetch_portal_deadlines(login, password):
                         if tool_type == "tasks":
                             for tr in f_soup.find_all("tr"):
                                 cols = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
-                                if len(cols) >= 4 and cols[0] != "Название приложения":
+                                if len(cols) >= 4:
                                     title_t, status, deadline_raw = cols[0], cols[1], cols[3]
-                                    if "сдано" not in status.lower():
-                                        dt = parse_deadline(deadline_raw)
-                                        if dt is None or dt > now:
-                                            results.append({
-                                                "id": f"task_{title_t}_{deadline_raw}",
-                                                "course": c["title"],
-                                                "type": "Задание",
-                                                "title": title_t,
-                                                "deadline_iso": dt.isoformat() if dt else now.isoformat(),
-                                                "deadline_str": deadline_raw,
-                                                "timestamp": dt.timestamp() if dt else now.timestamp()
-                                            })
+
+                                    # Фильтр мусора и заголовков
+                                    if not title_t or title_t.lower() in ["название приложения", "название", "статус"]:
+                                        continue
+
+                                    # Фильтр сданных работ
+                                    st_lower = status.lower()
+                                    if "сдано" in st_lower or "проверено" in st_lower or "возвращено" in st_lower:
+                                        continue
+
+                                    dt = parse_deadline(deadline_raw)
+                                    # Если даты нет (например "Не применимо") или она уже прошла - пропускаем
+                                    if dt and dt > now:
+                                        results.append({
+                                            "id": f"task_{title_t}_{deadline_raw}",
+                                            "course": c["title"],
+                                            "type": "Задание",
+                                            "title": title_t,
+                                            "deadline_iso": dt.isoformat(),
+                                            "deadline_str": deadline_raw,
+                                            "timestamp": dt.timestamp()
+                                        })
 
                         # Парсинг тестов
                         elif tool_type == "tests":
                             for tr in f_soup.find_all("tr"):
                                 cols = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
-                                if len(cols) >= 3 and cols[0] not in ["Название", "Пройти тест"]:
+                                if len(cols) >= 3:
                                     title_t, deadline_raw = cols[0], cols[2]
+
+                                    # Фильтр мусора и заголовков
+                                    if not title_t or title_t.lower() in ["название", "пройти тест"]:
+                                        continue
+
                                     dt = parse_deadline(deadline_raw)
-                                    if dt is None or dt > now:
+                                    # Если даты нет или она уже прошла - пропускаем
+                                    if dt and dt > now:
                                         results.append({
                                             "id": f"test_{title_t}_{deadline_raw}",
                                             "course": c["title"],
                                             "type": "Тест",
                                             "title": title_t,
-                                            "deadline_iso": dt.isoformat() if dt else now.isoformat(),
+                                            "deadline_iso": dt.isoformat(),
                                             "deadline_str": deadline_raw,
-                                            "timestamp": dt.timestamp() if dt else now.timestamp()
+                                            "timestamp": dt.timestamp()
                                         })
                     except Exception:
                         pass
@@ -388,5 +405,8 @@ async def fetch_portal_deadlines(login, password):
         print(f"[ERROR при сборе дедлайнов]: {type(e).__name__}: {e}")
         traceback.print_exc()
 
-    print(f"[DEBUG TOTAL RESULTS]: Собрано {len(results)} дедлайнов")
+    # Сортируем результаты по дате сдачи (сначала самые горящие)
+    results.sort(key=lambda x: x["timestamp"])
+
+    print(f"[DEBUG TOTAL RESULTS]: Собрано актуальных дедлайнов: {len(results)}")
     return results
