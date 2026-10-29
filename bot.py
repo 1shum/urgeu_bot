@@ -692,16 +692,26 @@ async def handle_callback(
     # Просмотр списка актуальных дедлайнов прямо из бота
     # Просмотр списка актуальных дедлайнов
     if data == "show_deadlines_list":
-        users = load_json(USERS_FILE)
-        user = users.get(str(chat_id), {})
-        login = user.get("portal_login")
-        enc_pw = user.get("portal_password")
+        # 1. Проверяем данные в памяти context.user_data
+        login = context.user_data.get("portal_login")
+        raw_password = context.user_data.get("portal_password")
 
-        if not login or not enc_pw:
-            # Предупреждаем пользователя прямо в сообщении
+        # 2. Если в памяти нет, проверяем базу users.json
+        if not login or not raw_password:
+            users = load_json(USERS_FILE)
+            user = users.get(str(chat_id), {})
+            login = user.get("portal_login")
+            enc_pw = user.get("portal_password")
+            if enc_pw:
+                try:
+                    raw_password = decrypt_password(enc_pw)
+                except Exception:
+                    raw_password = None
+
+        if not login or not raw_password:
             warn_text = (
                 "⚠️ **Портал не привязан!**\n\n"
-                "Чтобы просматривать задания и тесты, перейди в **Личный кабинет** и укажи логин и пароль от портала УрГЭУ."
+                "Чтобы просматривать задания и тесты, перейди в **Личный кабинет** и привяжи аккаунт портала УрГЭУ."
             )
             buttons = [
                 [InlineKeyboardButton("👤 В Личный кабинет", callback_data="profile_menu")],
@@ -714,7 +724,7 @@ async def handle_callback(
                 )
             return
 
-        # 1. Показываем плашку загрузки
+        # Показываем плашку загрузки
         loading_text = (
             "⏳ **Сканирую портал УрГЭУ...**\n"
             "─\n"
@@ -725,15 +735,14 @@ async def handle_callback(
             with open(BANNERS["main"], "rb") as photo:
                 await query.edit_message_media(
                     media=InputMediaPhoto(media=photo, caption=loading_text, parse_mode="Markdown"),
-                    reply_markup=InlineKeyboardMarkup(
-                        [[InlineKeyboardButton("⏳ Загрузка данных...", callback_data="none")]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏳ Загрузка...", callback_data="none")]])
                 )
         except Exception as e:
             print(f"[ERROR] Не удалось показать экран загрузки: {e}")
 
         # 2. Запрашиваем данные с портала
         try:
-            raw_password = decrypt_password(enc_pw)
+            deadlines = await fetch_portal_deadlines(login, raw_password)
             deadlines = await fetch_portal_deadlines(login, raw_password)
 
             if not deadlines:
