@@ -112,6 +112,48 @@ def save_json(filepath: str, data: dict) -> None:
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+async def restore_data_from_telegram(bot) -> None:
+    """Восстанавливает users.json из админского чата при холодном рестарте на Render."""
+    try:
+        chat = await bot.get_chat(ADMIN_ID)
+        pinned = chat.pinned_message
+        if (
+            pinned
+            and pinned.document
+            and pinned.document.file_name == USERS_FILE
+        ):
+            file = await bot.get_file(pinned.document.file_id)
+            await file.download_to_drive(USERS_FILE)
+            print("База users.json успешно восстановлена из Telegram-бэкапа!")
+    except Exception as e:
+        print(f"Не удалось восстановить базу из Telegram: {e}")
+
+
+async def sync_backup_to_telegram(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Фоновая задача: отправляет свежий users.json в админский чат и закрепляет его."""
+    if not os.path.exists(USERS_FILE):
+        return
+    try:
+        users = load_json(USERS_FILE)
+        if not users:
+            return
+
+        with open(USERS_FILE, "rb") as f:
+            msg = await context.bot.send_document(
+                chat_id=ADMIN_ID,
+                document=f,
+                caption=f"📦 Автобэкап базы ({len(users)} пользователей)\n#backup_users",
+                disable_notification=True
+            )
+            # Закрепляем без звука, чтобы при рестарте бот всегда брал самый свежий файл
+            await context.bot.pin_chat_message(
+                chat_id=ADMIN_ID,
+                message_id=msg.message_id,
+                disable_notification=True
+            )
+    except Exception as e:
+        print(f"Ошибка сохранения автобэкапа в Telegram: {e}")
+
 def load_notifications() -> dict:
     return load_json(NOTIF_FILE)
 
@@ -1444,14 +1486,26 @@ async def handle_user_photo(
         parse_mode="Markdown",
         reply_markup=get_profile_keyboard(False),
     )
+async def on_startup(application):
+    # Если на Render поднялся пустой контейнер — восстанавливаем базу
+    if not os.path.exists(USERS_FILE) or not load_json(USERS_FILE):
+        await restore_data_from_telegram(application.bot)
+
+
 def main() -> None:
     threading.Thread(target=run_fake_server, daemon=True).start()
 
     print("Бот запускается...")
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .post_init(on_startup)
+        .build()
+    )
 
     if app.job_queue:
         app.job_queue.run_repeating(send_daily_notifications, interval=60, first=10)
+        app.job_queue.run_repeating(sync_backup_to_telegram, interval=900, first=30)
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("admin", admin_command))
