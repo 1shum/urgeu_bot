@@ -1,6 +1,8 @@
 import asyncio
 import html as html_lib
 import os
+import traceback
+from datetime import datetime
 from urllib.parse import urljoin
 import aiohttp
 from bs4 import BeautifulSoup
@@ -83,7 +85,7 @@ async def check_portal_auth(login: str, password: str) -> tuple[bool, str]:
 async def get_portal_rating(login: str, password: str) -> tuple:
     """
     Авторизуется на портале, переключает Wicket на 'Рейтинг'
-    и собирает лаконичный список дисциплин и процентов.
+    и собирает список дисциплин и процентов.
     """
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
@@ -106,7 +108,7 @@ async def get_portal_rating(login: str, password: str) -> tuple:
                 if resp.status != 200:
                     return False, "Не удалось войти на портал.", {}
 
-            # 2. Переходим на главную страницу студента, чтобы узнать его личный URL страницы обучения
+            # 2. Переходим на главную страницу студента
             home_url = f"https://portal.usue.ru/portal/site/~{login}"
             async with session.get(home_url, allow_redirects=True, proxy=PORTAL_PROXY) as resp:
                 if resp.status != 200:
@@ -114,7 +116,6 @@ async def get_portal_rating(login: str, password: str) -> tuple:
                 raw_home = await resp.read()
                 soup_home = BeautifulSoup(raw_home.decode("utf-8", errors="ignore"), "html.parser")
 
-            # Ищем пункт меню "Сведения об обучении" и забираем ссылку из него
             edu_link = None
             for a in soup_home.find_all("a", href=True):
                 link_text = a.get_text(strip=True).lower()
@@ -127,7 +128,6 @@ async def get_portal_rating(login: str, password: str) -> tuple:
             else:
                 target_url = home_url
 
-            # Загружаем найденную страницу с оценками
             async with session.get(target_url, allow_redirects=True, proxy=PORTAL_PROXY) as resp:
                 if resp.status != 200:
                     return False, f"Ошибка загрузки страницы обучения: {resp.status}", {}
@@ -147,7 +147,6 @@ async def get_portal_rating(login: str, password: str) -> tuple:
                 base_tool_url = str(tool_resp.url)
                 tool_html = (await tool_resp.read()).decode("utf-8", errors="ignore")
 
-            # Извлечение актуальной AJAX-ссылки вкладки Рейтинг
             soup_tool = BeautifulSoup(tool_html, "html.parser")
             rating_link = soup_tool.find("a", id="idd") or soup_tool.find("a", id="id8") or soup_tool.find(
                 lambda tag: tag.name == "a" and "Рейтинг" in tag.text
@@ -169,7 +168,7 @@ async def get_portal_rating(login: str, password: str) -> tuple:
                 "X-Requested-With": "XMLHttpRequest"
             }
 
-            async with session.get(ajax_url, headers=ajax_headers, allow_redirects=True,proxy=PORTAL_PROXY) as ajax_resp:
+            async with session.get(ajax_url, headers=ajax_headers, allow_redirects=True, proxy=PORTAL_PROXY) as ajax_resp:
                 ajax_raw = await ajax_resp.read()
                 response_text = ajax_raw.decode("utf-8", errors="ignore")
 
@@ -228,8 +227,7 @@ async def get_portal_rating(login: str, password: str) -> tuple:
 
         except Exception as e:
             return False, f"Ошибка при получении рейтинга: {e}", {}
-from datetime import datetime
-from urllib.parse import urljoin
+
 
 ru_months = {
     "янв": "01", "фев": "02", "мар": "03", "апр": "04",
@@ -267,6 +265,8 @@ def parse_deadline(date_str: str):
             pass
 
     return None
+
+
 async def fetch_portal_deadlines(login, password):
     base_url = "https://portal.usue.ru"
     login_url = f"{base_url}/portal/xlogin"
@@ -285,11 +285,13 @@ async def fetch_portal_deadlines(login, password):
     results = []
     now = datetime.now()
 
+    print(f"[DEBUG AUTH] Логин: '{login}', длина пароля: {len(password) if password else 0}")
+
     try:
         timeout = aiohttp.ClientTimeout(total=20)
         async with aiohttp.ClientSession(headers=headers, connector=connector, cookie_jar=jar, timeout=timeout) as session:
             # 1. Авторизация
-            login_res = await session.post(login_url, data=login_data, allow_redirects=True)
+            login_res = await session.post(login_url, data=login_data, allow_redirects=True, proxy=PORTAL_PROXY)
             portal_html = await login_res.text()
 
             soup = BeautifulSoup(portal_html, "html.parser")
@@ -312,7 +314,7 @@ async def fetch_portal_deadlines(login, password):
             # 2. Обход курсов
             for c in courses:
                 try:
-                    async with session.get(c["url"]) as resp:
+                    async with session.get(c["url"], proxy=PORTAL_PROXY) as resp:
                         site_html = await resp.text()
                 except Exception:
                     continue
@@ -329,7 +331,7 @@ async def fetch_portal_deadlines(login, password):
 
                 for tool_type, tool_url in tool_links.items():
                     try:
-                        async with session.get(tool_url) as resp:
+                        async with session.get(tool_url, proxy=PORTAL_PROXY) as resp:
                             p_html = await resp.text()
 
                         p_soup = BeautifulSoup(p_html, "html.parser")
@@ -338,7 +340,7 @@ async def fetch_portal_deadlines(login, password):
                             continue
 
                         iframe_url = urljoin(base_url, iframe["src"].strip())
-                        async with session.get(iframe_url) as resp:
+                        async with session.get(iframe_url, proxy=PORTAL_PROXY) as resp:
                             frame_html = await resp.text()
 
                         f_soup = BeautifulSoup(frame_html, "html.parser")
@@ -351,7 +353,6 @@ async def fetch_portal_deadlines(login, password):
                                     title_t, status, deadline_raw = cols[0], cols[1], cols[3]
                                     if "сдано" not in status.lower():
                                         dt = parse_deadline(deadline_raw)
-                                        # Если дата успешно распарсилась и она еще впереди (или парсер вернул объект)
                                         if dt is None or dt > now:
                                             results.append({
                                                 "id": f"task_{title_t}_{deadline_raw}",
@@ -384,7 +385,8 @@ async def fetch_portal_deadlines(login, password):
                         pass
 
     except Exception as e:
-        print(f"[ERROR при сборе дедлайнов]: {e}")
+        print(f"[ERROR при сборе дедлайнов]: {type(e).__name__}: {e}")
+        traceback.print_exc()
 
     print(f"[DEBUG TOTAL RESULTS]: Собрано {len(results)} дедлайнов")
     return results
