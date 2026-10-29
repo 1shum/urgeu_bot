@@ -735,12 +735,13 @@ async def handle_callback(
             with open(BANNERS["main"], "rb") as photo:
                 await query.edit_message_media(
                     media=InputMediaPhoto(media=photo, caption=loading_text, parse_mode="Markdown"),
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏳ Загрузка...", callback_data="none")]])
+                    reply_markup=InlineKeyboardMarkup(
+                        [[InlineKeyboardButton("⏳ Загрузка...", callback_data="none")]])
                 )
         except Exception as e:
             print(f"[ERROR] Не удалось показать экран загрузки: {e}")
 
-        # 3. Запрашиваем данные с портала (ТЕПЕРЬ ВНЕ БЛОКА EXCEPT)
+        # 3. Запрашиваем данные с портала
         try:
             deadlines = await fetch_portal_deadlines(login, raw_password)
 
@@ -751,32 +752,44 @@ async def handle_callback(
                     "Все тесты и задания сданы или преподаватели ещё не выложили новые работы."
                 )
             else:
-                text = "📋 АКТИВНЫЕ ДЕДЛАЙНЫ С ПОРТАЛА:\n" + ("─" * 28) + "\n\n"
+                text = "📋 АКТИВНЫЕ ДЕДЛАЙНЫ (ПО ПРЕДМЕТАМ):\n" + ("─" * 28) + "\n\n"
                 now = datetime.now()
+
+                # Группируем дедлайны по предметам (курсам)
+                grouped = {}
                 for d in deadlines:
                     c_name = d.get("course", "Курс")
-                    t_name = d.get("title", "Работа")
-                    t_type = d.get("type", "Тест")
-                    d_str = d.get("deadline_str") or d.get("raw_date", "Срок не указан")
+                    if c_name not in grouped:
+                        grouped[c_name] = []
+                    grouped[c_name].append(d)
 
-                    left_str = ""
-                    iso_val = d.get("deadline_iso")
-                    if iso_val:
-                        try:
-                            dt = datetime.fromisoformat(iso_val)
-                            diff = dt - now
-                            days = diff.days
-                            hours = int(diff.seconds // 3600)
-                            left_str = f" (осталось: {days} дн. {hours} ч.)" if days > 0 else f" (осталось: {hours} ч.)"
-                        except Exception:
-                            pass
+                for c_name, items in grouped.items():
+                    text += f"📚 <b>{c_name}</b>:\n"
+                    for i, d in enumerate(items):
+                        t_name = d.get("title", "Работа")
+                        t_type = d.get("type", "Тест")
+                        d_str = d.get("deadline_str") or d.get("raw_date", "Срок не указан")
 
-                    icon = "🧪" if "тест" in t_type.lower() else "📝"
-                    text += (
-                        f"{icon} [{t_type}] {t_name}\n"
-                        f"📚 {c_name}\n"
-                        f"⏳ Срок: {d_str}{left_str}\n\n"
-                    )
+                        left_str = ""
+                        iso_val = d.get("deadline_iso")
+                        if iso_val:
+                            try:
+                                dt = datetime.fromisoformat(iso_val)
+                                diff = dt - now
+                                days = diff.days
+                                hours = int(diff.seconds // 3600)
+                                left_str = f" ({days} дн. {hours} ч.)" if days > 0 else f" ({hours} ч.)"
+                            except Exception:
+                                pass
+
+                        icon = "🧪" if "тест" in t_type.lower() else "📝"
+
+                        # Рисуем аккуратные веточки списка
+                        is_last = (i == len(items) - 1)
+                        prefix = "  └ " if is_last else "  ├ "
+
+                        text += f"{prefix}{icon} {t_name} — ⏳ <i>{d_str}</i>{left_str}\n"
+                    text += "\n"
 
             buttons = [
                 [InlineKeyboardButton("🔄 Обновить", callback_data="show_deadlines_list")],
@@ -790,7 +803,6 @@ async def handle_callback(
                 [InlineKeyboardButton("🔄 Попробовать снова", callback_data="show_deadlines_list")],
                 [InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")]
             ]
-
         if len(text) > 1000:
             await query.message.delete()
             await context.bot.send_message(
