@@ -751,7 +751,7 @@ async def handle_callback(
                 "⏳ <b>Подключаюсь к порталу УрГЭУ и считаю баллы...</b>",
                 parse_mode="HTML"
             )
-            
+
         try:
             raw_password = decrypt_password(enc_pw)
             success, rating_data, grades_dict = await get_portal_rating(login, raw_password)
@@ -1267,7 +1267,7 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
                 ok_kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton("📊 Посмотреть рейтинг", callback_data="portal_rating")],
-                    [InlineKeyboardButton("👤 В профиль", callback_data="profile")]
+                    [InlineKeyboardButton("👤 В профиль", callback_data="profile_menu")]
                 ])
                 await context.bot.send_message(
                     chat_id=chat_id,
@@ -1279,7 +1279,7 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             else:
                 fail_kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔄 Попробовать снова", callback_data="portal_bind")],
-                    [InlineKeyboardButton("👤 В профиль", callback_data="profile")]
+                    [InlineKeyboardButton("👤 В профиль", callback_data="profile_menu")]
                 ])
                 await context.bot.send_message(
                     chat_id=chat_id,
