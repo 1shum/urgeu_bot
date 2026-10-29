@@ -2,7 +2,7 @@ import json
 import os
 import re
 import threading
-from portal import check_portal_auth, get_portal_rating, encrypt_password, decrypt_password
+from portal import check_portal_auth, get_portal_rating, encrypt_password, decrypt_password, fetch_portal_deadlines
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from zoneinfo import ZoneInfo
@@ -573,7 +573,29 @@ async def handle_callback(
     context.user_data["main_menu_msg_id"] = query.message.message_id
 
     # 3. Меню настроек уведомлений
+    # 3. Меню управления всеми уведомлениями (Хаб)
     if data == "notif_menu":
+        text = (
+            "🔔 **ЦЕНТР УВЕДОМЛЕНИЙ**\n"
+            "─\n"
+            "Выбери нужный раздел для настройки напоминаний:\n\n"
+            "• **Дедлайны (портал)** — новые тесты, лабы и сроки сдачи.\n"
+            "• **Уведомления о парах** — вечерняя рассылка расписания на завтра."
+        )
+        buttons = [
+            [InlineKeyboardButton("📝 Дедлайны (портал)", callback_data="deadline_hub")],
+            [InlineKeyboardButton("🎓 Уведомления о парах", callback_data="pairs_notif_menu")],
+            [InlineKeyboardButton("🔙 В главное меню", callback_data="back_to_main")]
+        ]
+        with open(BANNERS["main"], "rb") as photo:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+        return
+
+    # Подменю настройки пар (твое прежнее меню)
+    if data == "pairs_notif_menu":
         notifs = load_notifications()
         user_info = notifs.get(str(chat_id), {})
         is_enabled = user_info.get("enabled", False)
@@ -581,54 +603,124 @@ async def handle_callback(
 
         status_icon = "🟢 Включены" if is_enabled else "🔴 Выключены"
         text = (
-            "🔔 **НАСТРОЙКА УВЕДОМЛЕНИЙ**\n"
-            "────────────────────\n"
+            "🔔 **НАСТРОЙКА УВЕДОМЛЕНИЙ О ПАРАХ**\n"
+            "─\n"
             f"Статус: *{status_icon}*\n"
             f"Время отправки: *{saved_time}*\n\n"
-            "Каждый день бот пришлет лаконичный пуш с парами на завтра. "
+            "Каждый день бот пришлет лаконичный пуш с парами на завтра.\n"
             "Выберите удобное время:"
         )
-        reply_markup = get_notif_keyboard(saved_time if is_enabled else None)
+        keyboard_buttons = get_notif_keyboard(saved_time if is_enabled else None).inline_keyboard
+        # Добавляем кнопку возврата в хаб уведомлений
+        new_kb = list(keyboard_buttons) + [[InlineKeyboardButton("🔙 Назад в уведомления", callback_data="notif_menu")]]
+
         with open(BANNERS["main"], "rb") as photo:
             await query.edit_message_media(
                 media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
-                reply_markup=reply_markup,
+                reply_markup=InlineKeyboardMarkup(new_kb),
             )
         return
+        # Подменю дедлайнов портала
+    if data == "deadline_hub":
+            users = load_json(USERS_FILE)
+            user = users.setdefault(str(chat_id), {})
+            settings = user.setdefault("deadline_notify", {"new": True, "24h": True, "3h": True})
 
-    elif data.startswith("set_notif_"):
-        notifs = load_notifications()
-        chosen = data.replace("set_notif_", "")
+            btn_new = "✅ Новые работы" if settings.get("new", True) else "❌ Новые работы"
+            btn_24h = "✅ За 24 часа" if settings.get("24h", True) else "❌ За 24 часа"
+            btn_3h = "✅ За 3 часа" if settings.get("3h", True) else "❌ За 3 часа"
 
+            text = (
+                "📝 **УВЕДОМЛЕНИЯ О ДЕДЛАЙНАХ**\n"
+                "─\n"
+                "Управляй напоминаниями о тестах и заданиях с портала УрГЭУ:\n\n"
+                "• **Новые работы** — бот напишет, если препод выложил тест/задание.\n"
+                "• **За 24 часа** — напоминание за сутки до срока.\n"
+                "• **За 3 часа** — срочное предупреждение.\n"
+            )
+            buttons = [
+                [InlineKeyboardButton("📋 Посмотреть активные дедлайны", callback_data="show_deadlines_list")],
+                [InlineKeyboardButton(btn_new, callback_data="toggle_dl:new"),
+                 InlineKeyboardButton(btn_24h, callback_data="toggle_dl:24h")],
+                [InlineKeyboardButton(btn_3h, callback_data="toggle_dl:3h")],
+                [InlineKeyboardButton("🔙 Назад в уведомления", callback_data="notif_menu")]
+            ]
+            with open(BANNERS["main"], "rb") as photo:
+                await query.edit_message_media(
+                    media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
+                    reply_markup=InlineKeyboardMarkup(buttons),
+                )
+            return
+
+        # Переключение тумблеров дедлайнов
+    if data.startswith("toggle_dl:"):
+            key = data.split(":")[1]
+            users = load_json(USERS_FILE)
+            user = users.setdefault(str(chat_id), {})
+            settings = user.setdefault("deadline_notify", {"new": True, "24h": True, "3h": True})
+            if key in settings:
+                settings[key] = not settings[key]
+                save_json(USERS_FILE, users)
+
+            btn_new = "✅ Новые работы" if settings.get("new", True) else "❌ Новые работы"
+            btn_24h = "✅ За 24 часа" if settings.get("24h", True) else "❌ За 24 часа"
+            btn_3h = "✅ За 3 часа" if settings.get("3h", True) else "❌ За 3 часа"
+
+            text = (
+                "📝 **УВЕДОМЛЕНИЯ О ДЕДЛАЙНАХ**\n"
+                "─\n"
+                "Управляй напоминаниями о тестах и заданиях с портала УрГЭУ:\n\n"
+                "• **Новые работы** — бот напишет, если препод выложил тест/задание.\n"
+                "• **За 24 часа** — напоминание за сутки до срока.\n"
+                "• **За 3 часа** — срочное предупреждение.\n"
+            )
+            buttons = [
+                [InlineKeyboardButton("📋 Посмотреть активные дедлайны", callback_data="show_deadlines_list")],
+                [InlineKeyboardButton(btn_new, callback_data="toggle_dl:new"),
+                 InlineKeyboardButton(btn_24h, callback_data="toggle_dl:24h")],
+                [InlineKeyboardButton(btn_3h, callback_data="toggle_dl:3h")],
+                [InlineKeyboardButton("🔙 Назад в уведомления", callback_data="notif_menu")]
+            ]
+            with open(BANNERS["main"], "rb") as photo:
+                await query.edit_message_media(
+                    media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
+                    reply_markup=InlineKeyboardMarkup(buttons),
+                )
+            return
+
+        # Просмотр списка актуальных дедлайнов прямо из бота
+    # Просмотр списка актуальных дедлайнов прямо из бота
+    if data == "show_deadlines_list":
         users = load_json(USERS_FILE)
-        current_subgroup = subgroup or users.get(str(chat_id), {}).get("subgroup")
+        user = users.get(str(chat_id), {})
+        if not user.get("portal_login") or not user.get("portal_password"):
+            await query.answer("Сначала привяжи портал в Личном кабинете!", show_alert=True)
+            return
 
-        if chosen == "off":
-            if str(chat_id) in notifs:
-                notifs[str(chat_id)]["enabled"] = False
-                save_notifications(notifs)
-            text = (
-                "🔕 **Уведомления отключены.**\n\n"
-                "Вы можете включить их в любой момент, выбрав время ниже:"
-            )
-            reply_markup = get_notif_keyboard(None)
+        await query.answer("Сканирую портал... ⏳")
+        deadlines = await fetch_portal_deadlines(user["portal_login"], decrypt_password(user["portal_password"]))
+
+        if not deadlines:
+            text = "🎉 **Горящих дедлайнов нет!**\nВсе тесты и задания сданы."
         else:
-            notifs[str(chat_id)] = {
-                "enabled": True,
-                "time": chosen,
-                "subgroup": current_subgroup,
-            }
-            save_notifications(notifs)
-            text = (
-                f"✅ **Уведомления настроены на {chosen}!**\n\n"
-                f"Каждый вечер в *{chosen}* бот будет присылать список пар на следующий день."
-            )
-            reply_markup = get_notif_keyboard(chosen)
+            text = "📋 **АКТИВНЫЕ ДЕДЛАЙНЫ С ПОРТАЛА:**\n─\n"
+            now = datetime.now()
+            for d in deadlines:
+                diff = datetime.fromisoformat(d["deadline_iso"]) - now
+                days = diff.days
+                hours = int(diff.seconds // 3600)
+                left_str = f"{days} дн. {hours} ч." if days > 0 else f"{hours} ч."
+                icon = "🧪" if d["type"] == "Тест" else "📝"
+                text += f"{icon} **{d['type']}: {d['title']}**\n📚 _{d['course']}_\n⏳ Срок: `{d['deadline_str']}` (осталось: {left_str})\n\n"
 
+        buttons = [
+            [InlineKeyboardButton("🔄 Обновить", callback_data="show_deadlines_list")],
+            [InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")]
+        ]
         with open(BANNERS["main"], "rb") as photo:
             await query.edit_message_media(
                 media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
-                reply_markup=reply_markup,
+                reply_markup=InlineKeyboardMarkup(buttons),
             )
         return
 
@@ -1554,6 +1646,91 @@ async def on_startup(application):
         await restore_data_from_telegram(application.bot)
 
 
+# ==========================================
+# ХАБ УВЕДОМЛЕНИЙ И ДЕДЛАЙНОВ
+# ==========================================
+
+async def show_notifications_hub(query, context):
+    text = (
+        "🔔 <b>Центр управления уведомлениями</b>\n\n"
+        "Здесь можно настроить напоминания:\n\n"
+        "• <b>Дедлайны (портал)</b> — новые задания, тесты и сроки сдачи.\n"
+        "• <b>Уведомления о парах</b> — утренний дайджест и напоминания перед началом."
+    )
+    keyboard = [
+        [InlineKeyboardButton("📝 Дедлайны и тесты", callback_data="deadline_settings")],
+        [InlineKeyboardButton("🎓 Напоминания о парах", callback_data="schedule_notify_settings")],
+        [InlineKeyboardButton("🔙 В главное меню", callback_data="back_to_main")]
+    ]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+
+async def show_deadline_settings(query, context, toggle_key=None):
+    user_id = str(query.from_user.id)
+    users = load_json(USERS_FILE)
+    user = users.setdefault(user_id, {})
+
+    settings = user.setdefault("deadline_notify", {
+        "new": True,
+        "24h": True,
+        "3h": True
+    })
+
+    if toggle_key and toggle_key in settings:
+        settings[toggle_key] = not settings[toggle_key]
+        save_json(USERS_FILE, users)
+
+    btn_new = "✅ Новые задания и тесты" if settings.get("new", True) else "❌ Новые задания и тесты"
+    btn_24h = "✅ Напоминать за 24 часа" if settings.get("24h", True) else "❌ Напоминать за 24 часа"
+    btn_3h = "✅ Напоминать за 3 часа" if settings.get("3h", True) else "❌ Напоминать за 3 часа"
+
+    text = (
+        "⚙️ <b>Настройка уведомлений о дедлайнах</b>\n\n"
+        "Нажимай на кнопки, чтобы включить/отключить оповещения:\n\n"
+        "• <b>Новые задания и тесты</b> — уведомление сразу при появлении на портале.\n"
+        "• <b>За 24 часа</b> — предупреждение за сутки до срока сдачи.\n"
+        "• <b>За 3 часа</b> — финальное горящее напоминание."
+    )
+
+    keyboard = [
+        [InlineKeyboardButton(btn_new, callback_data="set_deadline:new")],
+        [InlineKeyboardButton(btn_24h, callback_data="set_deadline:24h")],
+        [InlineKeyboardButton(btn_3h, callback_data="set_deadline:3h")],
+        [InlineKeyboardButton("🔙 Назад в уведомления", callback_data="notif_menu")]
+    ]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+
+async def show_schedule_notify_settings(query, context, toggle_key=None):
+    user_id = str(query.from_user.id)
+    users = load_json(USERS_FILE)
+    user = users.setdefault(user_id, {})
+
+    settings = user.setdefault("schedule_notify", {
+        "morning": True,
+        "before_pair": True
+    })
+
+    if toggle_key and toggle_key in settings:
+        settings[toggle_key] = not settings[toggle_key]
+        save_json(USERS_FILE, users)
+
+    btn_morning = "✅ Утренний план (07:30)" if settings.get("morning", True) else "❌ Утренний план (07:30)"
+    btn_before = "✅ За 15 минут до пары" if settings.get("before_pair", True) else "❌ За 15 минут до пары"
+
+    text = (
+        "🎓 <b>Настройка уведомлений о парах</b>\n\n"
+        "Управляй напоминаниями расписания:\n\n"
+        "• <b>Утренний план</b> — список пар на сегодня каждое утро.\n"
+        "• <b>За 15 минут</b> — предупреждение перед началом пары с аудиторией."
+    )
+
+    keyboard = [
+        [InlineKeyboardButton(btn_morning, callback_data="set_sched:morning")],
+        [InlineKeyboardButton(btn_before, callback_data="set_sched:before_pair")],
+        [InlineKeyboardButton("🔙 Назад в уведомления", callback_data="notif_menu")]
+    ]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 def main() -> None:
     threading.Thread(target=run_fake_server, daemon=True).start()
 

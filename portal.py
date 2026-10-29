@@ -228,3 +228,141 @@ async def get_portal_rating(login: str, password: str) -> tuple:
 
         except Exception as e:
             return False, f"Ошибка при получении рейтинга: {e}", {}
+from datetime import datetime
+from urllib.parse import urljoin
+
+def parse_deadline(date_str):
+    if not date_str:
+        return None
+    try:
+        return datetime.strptime(date_str.strip(), "%d.%m.%Y %H:%M")
+    except Exception:
+        pass
+
+    ru_months = {
+        "янв": "01", "фев": "02", "мар": "03", "апр": "04",
+        "май": "05", "июн": "06", "июл": "07", "авг": "08",
+        "сен": "09", "окт": "10", "ноя": "11", "дек": "12"
+    }
+    cleaned = date_str.strip().lower()
+    for ru, num in ru_months.items():
+        if f"-{ru}-" in cleaned:
+            cleaned = cleaned.replace(f"-{ru}-", f"-{num}-")
+            break
+    try:
+        return datetime.strptime(cleaned, "%Y-%m-%d %I:%M:%S %p")
+    except Exception:
+        return None
+
+async def fetch_portal_deadlines(login, password):
+    base_url = "https://portal.usue.ru"
+    login_url = f"{base_url}/portal/xlogin"
+    login_data = {"eid": login, "pw": password, "submit": "Вход"}
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+
+    connector = aiohttp.TCPConnector(ssl=False)
+    jar = aiohttp.CookieJar(unsafe=True)
+
+    ignore_titles = {
+        "мой сайт", "выход из системы", "вход в систему", "профиль",
+        "запись на курсы", "календарь", "ресурсы", "объявления",
+        "мои сайты", "мои настройки", "моя учетная запись", "сведения об обучении"
+    }
+
+    results = []
+    now = datetime.now()
+
+    try:
+        async with aiohttp.ClientSession(headers=headers, connector=connector, cookie_jar=jar) as session:
+            await session.get(f"{base_url}/portal")
+            login_res = await session.post(login_url, data=login_data, allow_redirects=True)
+            portal_html = await login_res.text()
+
+            soup = BeautifulSoup(portal_html, "html.parser")
+            courses = []
+
+            for a in soup.find_all("a", href=True):
+                raw_href = a["href"].strip()
+                title = a.get_text(strip=True)
+                if not title or title.lower() in ignore_titles:
+                    continue
+                if "~" in raw_href or "!gateway" in raw_href:
+                    continue
+                if "/portal/site/" in raw_href:
+                    full_url = urljoin(base_url, raw_href)
+                    if not any(c["url"] == full_url for c in courses):
+                        courses.append({"title": title, "url": full_url})
+
+            for c in courses:
+                try:
+                    async with session.get(c["url"]) as resp:
+                        site_html = await resp.text()
+                except Exception:
+                    continue
+
+                course_soup = BeautifulSoup(site_html, "html.parser")
+                tool_links = {}
+                for a in course_soup.find_all("a", href=True):
+                    text = a.get_text(strip=True).lower()
+                    href = urljoin(base_url, a["href"].strip())
+                    if "задания" in text and "/portal/site/" in href:
+                        tool_links["tasks"] = href
+                    elif ("тесты" in text or "экзамены" in text) and "/portal/site/" in href:
+                        tool_links["tests"] = href
+
+                for tool_type, tool_url in tool_links.items():
+                    try:
+                        async with session.get(tool_url) as resp:
+                            p_html = await resp.text()
+
+                        p_soup = BeautifulSoup(p_html, "html.parser")
+                        iframe = p_soup.find("iframe")
+                        if not iframe or not iframe.get("src"):
+                            continue
+
+                        iframe_url = urljoin(base_url, iframe["src"].strip())
+                        async with session.get(iframe_url) as resp:
+                            frame_html = await resp.text()
+
+                        f_soup = BeautifulSoup(frame_html, "html.parser")
+
+                        if tool_type == "tasks":
+                            for tr in f_soup.find_all("tr"):
+                                cols = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
+                                if len(cols) >= 4 and cols[0] != "Название приложения":
+                                    title, status, deadline_raw = cols[0], cols[1], cols[3]
+                                    if "сдано" not in status.lower():
+                                        dt = parse_deadline(deadline_raw)
+                                        if dt and dt > now:
+                                            results.append({
+                                                "id": f"task_{title}_{deadline_raw}",
+                                                "course": c["title"],
+                                                "type": "Задание",
+                                                "title": title,
+                                                "deadline_iso": dt.isoformat(),
+                                                "deadline_str": deadline_raw,
+                                                "timestamp": dt.timestamp()
+                                            })
+                        elif tool_type == "tests":
+                            for tr in f_soup.find_all("tr"):
+                                cols = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
+                                if len(cols) >= 3 and cols[0] not in ["Название", "Пройти тест"]:
+                                    title, deadline_raw = cols[0], cols[2]
+                                    dt = parse_deadline(deadline_raw)
+                                    if dt and dt > now:
+                                        results.append({
+                                            "id": f"test_{title}_{deadline_raw}",
+                                            "course": c["title"],
+                                            "type": "Тест",
+                                            "title": title,
+                                            "deadline_iso": dt.isoformat(),
+                                            "deadline_str": deadline_raw,
+                                            "timestamp": dt.timestamp()
+                                        })
+                    except Exception:
+                        pass
+    except Exception as e:
+        print(f"Ошибка при сборе дедлайнов: {e}")
+
+    results.sort(key=lambda x: x["timestamp"])
+    return results
