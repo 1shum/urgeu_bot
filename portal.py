@@ -96,8 +96,6 @@ async def get_portal_rating(login: str, password: str) -> tuple[bool, str]:
         "submit": "Вход"
     }
 
-    portal_page_url = f"https://portal.usue.ru/portal/site/~{login}/page/5a28334c-5aad-443b-87af-8b22ded61301"
-
     connector = aiohttp.TCPConnector(ssl=False)
     jar = aiohttp.CookieJar()
 
@@ -108,21 +106,41 @@ async def get_portal_rating(login: str, password: str) -> tuple[bool, str]:
                 if resp.status != 200:
                     return False, "Не удалось войти на портал."
 
-            # 2. Получение страницы 'Сведения об обучении'
-            async with session.get(portal_page_url, allow_redirects=True, proxy=PORTAL_PROXY) as resp:
+            # 2. Переходим на главную страницу студента, чтобы узнать его личный URL страницы обучения
+            home_url = f"https://portal.usue.ru/portal/site/~{login}"
+            async with session.get(home_url, allow_redirects=True, proxy=PORTAL_PROXY) as resp:
+                if resp.status != 200:
+                    return False, f"Ошибка загрузки личного кабинета: {resp.status}"
+                raw_home = await resp.read()
+                soup_home = BeautifulSoup(raw_home.decode("utf-8", errors="ignore"), "html.parser")
+
+            # Ищем пункт меню "Сведения об обучении" и забираем ссылку из него
+            edu_link = None
+            for a in soup_home.find_all("a", href=True):
+                link_text = a.get_text(strip=True).lower()
+                if "сведения об обучении" in link_text or "обучение" in link_text:
+                    edu_link = a["href"]
+                    break
+
+            if edu_link:
+                target_url = urljoin("https://portal.usue.ru", edu_link)
+            else:
+                target_url = home_url
+
+            # Загружаем найденную страницу с оценками
+            async with session.get(target_url, allow_redirects=True, proxy=PORTAL_PROXY) as resp:
                 if resp.status != 200:
                     return False, f"Ошибка загрузки страницы обучения: {resp.status}"
-
                 raw = await resp.read()
                 soup_main = BeautifulSoup(raw.decode("utf-8", errors="ignore"), "html.parser")
 
-                iframe = soup_main.find("iframe")
-                if not iframe or not iframe.get("src"):
-                    return False, "Не найден фрейм сведений об обучении."
+            iframe = soup_main.find("iframe")
+            if not iframe or not iframe.get("src"):
+                return False, "Не найден фрейм сведений об обучении."
 
-                tool_url = iframe.get("src")
-                if not tool_url.startswith("http"):
-                    tool_url = urljoin("https://portal.usue.ru", tool_url)
+            tool_url = iframe.get("src")
+            if not tool_url.startswith("http"):
+                tool_url = urljoin("https://portal.usue.ru", tool_url)
 
             # 3. Вход во фрейм
             async with session.get(tool_url, allow_redirects=True, proxy=PORTAL_PROXY) as tool_resp:
@@ -181,7 +199,7 @@ async def get_portal_rating(login: str, password: str) -> tuple[bool, str]:
                     if i >= 2:
                         possible_subj = all_divs[i - 2]
                         # Проверяем, что это не ФИО студента и не дата
-                        if not any(skip in possible_subj for skip in ["Текущий рейтинг", "Самосадов", "ПИЭ-"]):
+                        if not any(skip in possible_subj.lower() for skip in ["текущий рейтинг", "преподаватель", "семестр"]):
                             subject_name = possible_subj
                         elif i >= 1 and not any(
                                 skip in all_divs[i - 1] for skip in ["Преподаватель", "Текущий рейтинг"]):
