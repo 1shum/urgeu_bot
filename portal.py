@@ -351,19 +351,31 @@ async def fetch_portal_deadlines(login, password):
                             for tr in f_soup.find_all("tr"):
                                 cols = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
                                 if len(cols) >= 4:
-                                    title_t, status, deadline_raw = cols[0], cols[1], cols[3]
+                                    # 1. Достаем название из ссылки (так как колонка 0 часто пустая)
+                                    a_tag = tr.find("a")
+                                    title_t = a_tag.get_text(strip=True) if a_tag else cols[1]
 
-                                    # Фильтр мусора и заголовков
                                     if not title_t or title_t.lower() in ["название приложения", "название", "статус"]:
                                         continue
 
-                                    # Фильтр сданных работ
-                                    st_lower = status.lower()
-                                    if "сдано" in st_lower or "проверено" in st_lower or "возвращено" in st_lower:
+                                    # 2. Проверяем, не сдана ли работа
+                                    row_text = " ".join(cols).lower()
+                                    if "сдано" in row_text or "проверено" in row_text or "возвращено" in row_text:
                                         continue
 
-                                    dt = parse_deadline(deadline_raw)
-                                    # Если даты нет (например "Не применимо") или она уже прошла - пропускаем
+                                    # 3. Ищем саму дату дедлайна среди всех колонок
+                                    parsed_dates = []
+                                    for col in cols:
+                                        parsed = parse_deadline(col)
+                                        if parsed:
+                                            parsed_dates.append((parsed, col))
+
+                                    if parsed_dates:
+                                        dt, deadline_raw = parsed_dates[-1]  # Последняя дата - это Срок сдачи
+                                    else:
+                                        dt = None
+
+                                    # 4. Сохраняем, только если дедлайн ещё не прошел
                                     if dt and dt > now:
                                         results.append({
                                             "id": f"task_{title_t}_{deadline_raw}",
