@@ -752,21 +752,18 @@ async def handle_callback(
                     "Все тесты и задания сданы или преподаватели ещё не выложили новые работы."
                 )
             else:
-                # Проверяем, нажата ли кнопка "Показать остальные"
                 show_all = (data == "show_all_deadlines")
 
-                # Сортируем все дедлайны по времени (сначала самые горящие)
+                # Сортируем дедлайны по времени (самые горящие первыми)
                 deadlines.sort(key=lambda x: x.get("timestamp", 0))
 
                 total_count = len(deadlines)
                 limit = 7 if not show_all else total_count
                 visible_deadlines = deadlines[:limit]
 
-                text = f"📋 *АКТИВНЫЕ ДЕДЛАЙНЫ* (показано {len(visible_deadlines)} из {total_count}):\n" + (
-                            "─" * 28) + "\n\n"
+                text = f"📋 *АКТИВНЫЕ ДЕДЛАЙНЫ* (топ {len(visible_deadlines)} из {total_count}):\n" + ("─" * 28) + "\n\n"
                 now = datetime.now()
 
-                # Группируем видимые дедлайны по предметам
                 grouped = {}
                 for d in visible_deadlines:
                     c_name = d.get("course", "Курс")
@@ -775,32 +772,37 @@ async def handle_callback(
                     grouped[c_name].append(d)
 
                 for c_name, items in grouped.items():
-                    text += f"📚 *{c_name}*:\n"
+                    text += f"📚 *{c_name}*\n"
                     for i, d in enumerate(items):
                         t_name = d.get("title", "Работа")
                         t_type = d.get("type", "Тест")
-                        d_str = d.get("deadline_str") or d.get("raw_date", "Срок не указан")
 
-                        left_str = ""
+                        # Компактный парсинг даты: без года, дата и оставшееся время в одну строку
                         iso_val = d.get("deadline_iso")
+                        date_display = "Срок не указан"
+                        left_str = ""
+
                         if iso_val:
                             try:
                                 dt = datetime.fromisoformat(iso_val)
+                                date_display = dt.strftime("%d.%m %H:%M")
+
                                 diff = dt - now
                                 days = diff.days
                                 hours = int(diff.seconds // 3600)
-                                left_str = f" ({days} дн. {hours} ч.)" if days > 0 else f" ({hours} ч.)"
+                                left_str = f" • ост. {days}д {hours}ч" if days > 0 else f" • ост. {hours}ч"
                             except Exception:
                                 pass
 
                         icon = "🧪" if "тест" in t_type.lower() else "📝"
                         is_last = (i == len(items) - 1)
-                        prefix = "  └ " if is_last else "  ├ "
+                        branch = "└" if is_last else "├"
 
-                        text += f"{prefix}{icon} {t_name} — ⏳ __{d_str}__{left_str}\n"
+                        text += f" {branch} {icon} *{t_name}*\n"
+                        text += f"    ⏳ `{date_display}`{left_str}\n"
                     text += "\n"
 
-                # Формируем клавиатуру с кнопкой разворота/сворачивания
+                # Клавиатура с кнопкой разворота
                 buttons = []
                 if total_count > 7:
                     if not show_all:
@@ -808,16 +810,12 @@ async def handle_callback(
                         buttons.append([InlineKeyboardButton(f"📂 Показать остальные (ещё {remaining})",
                                                              callback_data="show_all_deadlines")])
                     else:
-                        buttons.append([InlineKeyboardButton("🔼 Свернуть список", callback_data="show_deadlines_list")])
+                        buttons.append([InlineKeyboardButton("🔼 Свернуть до топ-7", callback_data="show_deadlines_list")])
 
                 buttons.append([
                     InlineKeyboardButton("🔄 Обновить", callback_data="show_deadlines_list"),
                     InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")
                 ])
-            buttons = [
-                [InlineKeyboardButton("🔄 Обновить", callback_data="show_deadlines_list")],
-                [InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")]
-            ]
 
         except Exception as err:
             print(f"[ERROR] Ошибка сбора дедлайнов: {err}")
