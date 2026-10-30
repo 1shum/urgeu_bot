@@ -1,3 +1,4 @@
+from db import init_db, save_user_db, get_users_cache
 import json
 import os
 import re
@@ -160,11 +161,11 @@ def load_notifications() -> dict:
 def save_notifications(data: dict) -> None:
     save_json(NOTIF_FILE, data)
 
-def track_user_activity(user, action_name: str) -> None:
-    """Фиксирует пользователя и его активность в users.json."""
+async def track_user_activity(user, action_name: str) -> None:
+    """Фиксирует пользователя и его активность в Neon."""
     if not user:
         return
-    users = load_json(USERS_FILE)
+    users = get_users_cache()
     uid = str(user.id)
     now_str = datetime.now(TIMEZONE).strftime("%d.%m.%Y %H:%M")
 
@@ -184,7 +185,7 @@ def track_user_activity(user, action_name: str) -> None:
         users[uid]["actions_count"] = users[uid].get("actions_count", 0) + 1
         users[uid]["last_action"] = action_name
 
-    save_json(USERS_FILE, users)
+    await save_user_db(uid, users[uid])
 
 # --- КЛАВИАТУРЫ ---
 def get_main_keyboard(subgroup: int = None) -> InlineKeyboardMarkup:
@@ -406,7 +407,7 @@ async def send_daily_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def start_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    track_user_activity(update.effective_user, "/start")
+    await track_user_activity(update.effective_user, "/start")
 
     context.user_data["waiting_for_date"] = False
     context.user_data["waiting_for_feedback"] = False
@@ -520,7 +521,7 @@ async def handle_callback(
     subgroup = context.user_data.get("subgroup")
     banner_key = "main"
 
-    track_user_activity(query.from_user, f"btn:{data}")
+    await track_user_activity(query.from_user, f"btn:{data}")
 
     # Выгрузка базы данных в чат для администратора
     if data == "admin_download_db":
@@ -661,7 +662,7 @@ async def handle_callback(
             settings = user.setdefault("deadline_notify", {"new": True, "24h": True, "3h": True})
             if key in settings:
                 settings[key] = not settings[key]
-                save_json(USERS_FILE, users)
+                await save_user_db(str(chat_id), users[str(chat_id)])
 
             btn_new = "✅ Новые работы" if settings.get("new", True) else "❌ Новые работы"
             btn_24h = "✅ За 24 часа" if settings.get("24h", True) else "❌ За 24 часа"
@@ -955,8 +956,7 @@ async def handle_callback(
         if uid_str in users:
             users[uid_str].pop("user_group", None)
             users[uid_str].pop("subgroup", None)
-            save_json(USERS_FILE, users)
-
+            await save_user_db(uid_str, users[uid_str])
         # 3. Отправляем аккуратный запрос на ввод новой группы
         prompt_msg = await context.bot.send_message(
             chat_id=chat_id,
@@ -1027,7 +1027,7 @@ async def handle_callback(
             # Сохраняем свежие баллы в базу для следующего сравнения
             if uid in users:
                 users[uid]["last_rating"] = grades_dict
-                save_json(USERS_FILE, users)
+                await save_user_db(str(chat_id), users[str(chat_id)])
         else:
             text = str(rating_data)
 
@@ -1091,7 +1091,7 @@ async def handle_callback(
         uid = str(chat_id)
         if uid in users:
             users[uid]["subgroup"] = val
-            save_json(USERS_FILE, users)
+            await save_user_db(str(chat_id), users[str(chat_id)])
 
         # Сохраняем в уведомления
         notifs = load_notifications()
@@ -1365,7 +1365,7 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             users[uid_str] = {}
         users[uid_str]["user_group"] = entered_group
         users[uid_str].pop("subgroup", None)
-        save_json(USERS_FILE, users)
+        await save_user_db(uid_str, users[uid_str])
         context.user_data["waiting_for_group"] = False
 
         # 5. Очищаем старую подгруппу (у новой группы своя нумерация)
@@ -1506,7 +1506,7 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 user_entry = users.setdefault(str(chat_id), {})
                 user_entry["portal_login"] = login
                 user_entry["portal_password"] = enc_pw
-                save_json(USERS_FILE, users)
+                await save_user_db(str(chat_id), users[str(chat_id)])
 
                 # Дублируем данные в оперативную память для моментального отклика
                 context.user_data["portal_login"] = login
@@ -1687,11 +1687,11 @@ def run_fake_server():
         users = load_json(USERS_FILE)
         uid = str(user.id)
         if uid not in users:
-            track_user_activity(user, "set_avatar")
+            await track_user_activity(user, "set_avatar")
             users = load_json(USERS_FILE)
 
         users[uid]["avatar_file_id"] = avatar_file_id
-        save_json(USERS_FILE, users)
+        await save_user_db(str(chat_id), users[str(chat_id)])
 
         context.user_data["waiting_for_avatar"] = False
         menu_id = context.user_data.get("menu_message_id") or context.user_data.get("main_menu_msg_id")
@@ -1737,12 +1737,11 @@ async def handle_user_photo(
     users = load_json(USERS_FILE)
     uid = str(user.id)
     if uid not in users:
-        track_user_activity(user, "set_avatar")
+        await track_user_activity(user, "set_avatar")
         users = load_json(USERS_FILE)
 
     users[uid]["avatar_file_id"] = avatar_file_id
-    save_json(USERS_FILE, users)
-
+    await save_user_db(str(chat_id), users[str(chat_id)])
     context.user_data["waiting_for_avatar"] = False
     menu_id = context.user_data.get("menu_message_id") or context.user_data.get("main_menu_msg_id")
 
@@ -1760,17 +1759,9 @@ async def handle_user_photo(
         except BadRequest:
             pass
 
-    await update.message.reply_photo(
-        photo=avatar_file_id,
-        caption=prof_text,
-        parse_mode="Markdown",
-        reply_markup=get_profile_keyboard(False),
-    )
 async def on_startup(application):
-    # Если на Render поднялся пустой контейнер — восстанавливаем базу
-    if not os.path.exists(USERS_FILE) or not load_json(USERS_FILE):
-        await restore_data_from_telegram(application.bot)
-
+    print("Инициализация базы данных...")
+    await init_db()
 
 # ==========================================
 # ХАБ УВЕДОМЛЕНИЙ И ДЕДЛАЙНОВ
@@ -1804,8 +1795,7 @@ async def show_deadline_settings(query, context, toggle_key=None):
 
     if toggle_key and toggle_key in settings:
         settings[toggle_key] = not settings[toggle_key]
-        save_json(USERS_FILE, users)
-
+        await save_user_db(user_id, users[user_id])
     btn_new = "✅ Новые задания и тесты" if settings.get("new", True) else "❌ Новые задания и тесты"
     btn_24h = "✅ Напоминать за 24 часа" if settings.get("24h", True) else "❌ Напоминать за 24 часа"
     btn_3h = "✅ Напоминать за 3 часа" if settings.get("3h", True) else "❌ Напоминать за 3 часа"
@@ -1839,7 +1829,7 @@ async def show_schedule_notify_settings(query, context, toggle_key=None):
 
     if toggle_key and toggle_key in settings:
         settings[toggle_key] = not settings[toggle_key]
-        save_json(USERS_FILE, users)
+        await save_user_db(user_id, users[user_id])
 
     btn_morning = "✅ Утренний план (07:30)" if settings.get("morning", True) else "❌ Утренний план (07:30)"
     btn_before = "✅ За 15 минут до пары" if settings.get("before_pair", True) else "❌ За 15 минут до пары"
@@ -1871,7 +1861,7 @@ def main() -> None:
     try:
         if app.job_queue:
             app.job_queue.run_repeating(send_daily_notifications, interval=60, first=10)
-            app.job_queue.run_repeating(sync_backup_to_telegram, interval=900, first=30)
+            #app.job_queue.run_repeating(sync_backup_to_telegram, interval=900, first=30)
     except Exception as e:
         print(f"[WARN] Не удалось запустить фоновые задачи: {e}")
 
