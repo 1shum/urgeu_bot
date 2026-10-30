@@ -1,4 +1,3 @@
-import asyncio
 import html as html_lib
 import os
 import traceback

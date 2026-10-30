@@ -1,6 +1,5 @@
 import os
 import json
-import asyncio
 import asyncpg
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -18,7 +17,9 @@ async def init_db():
 
     try:
         # Подключаемся к Neon
-        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
+        # Очищаем URL от параметров запроса и передаем ssl="require"
+        clean_url = DATABASE_URL.split("?")[0]
+        _pool = await asyncpg.create_pool(clean_url, ssl="require", min_size=1, max_size=5)
 
         async with _pool.acquire() as conn:
             # Создаем таблицу, если её нет
