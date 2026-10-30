@@ -752,7 +752,7 @@ async def handle_callback(
                     "Все тесты и задания сданы или преподаватели ещё не выложили новые работы."
                 )
             else:
-                text = "📋 АКТИВНЫЕ ДЕДЛАЙНЫ (ПО ПРЕДМЕТАМ):\n" + ("─" * 28) + "\n\n"
+                text = "📋 *АКТИВНЫЕ ДЕДЛАЙНЫ (ПО ПРЕДМЕТАМ)*:\n" + ("─" * 28) + "\n\n"
                 now = datetime.now()
 
                 # Группируем дедлайны по предметам (курсам)
@@ -764,7 +764,7 @@ async def handle_callback(
                     grouped[c_name].append(d)
 
                 for c_name, items in grouped.items():
-                    text += f"📚 <b>{c_name}</b>:\n"
+                    text += f"📚 *{c_name}*:\n"
                     for i, d in enumerate(items):
                         t_name = d.get("title", "Работа")
                         t_type = d.get("type", "Тест")
@@ -784,11 +784,11 @@ async def handle_callback(
 
                         icon = "🧪" if "тест" in t_type.lower() else "📝"
 
-                        # Рисуем аккуратные веточки списка
+                        # Веточки списка
                         is_last = (i == len(items) - 1)
                         prefix = "  └ " if is_last else "  ├ "
 
-                        text += f"{prefix}{icon} {t_name} — ⏳ <i>{d_str}</i>{left_str}\n"
+                        text += f"{prefix}{icon} {t_name} — ⏳ __{d_str}__{left_str}\n"
                     text += "\n"
 
             buttons = [
