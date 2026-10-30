@@ -1,4 +1,4 @@
-from db import init_db, save_user_db, get_users_cache
+from db import get_users_cache, save_user_db, init_db, get_notifs_cache, save_notif_db
 import json
 import os
 import re
@@ -36,8 +36,6 @@ DEFAULT_GROUP = "ПИЭ-26-2"
 ADMIN_ID = 1087118817  # здесь твой числовой ID
 ADMIN_IDS = [ADMIN_ID]
 TIMEZONE = ZoneInfo("Asia/Yekaterinburg")
-NOTIF_FILE = "notifications.json"
-USERS_FILE = "users.json"
 TICKETS_FILE = "tickets.json"
 
 BANNERS = {
@@ -113,53 +111,11 @@ def save_json(filepath: str, data: dict) -> None:
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-async def restore_data_from_telegram(bot) -> None:
-    """Восстанавливает users.json из админского чата при холодном рестарте на Render."""
-    try:
-        chat = await bot.get_chat(ADMIN_ID)
-        pinned = chat.pinned_message
-        if (
-            pinned
-            and pinned.document
-            and pinned.document.file_name == USERS_FILE
-        ):
-            file = await bot.get_file(pinned.document.file_id)
-            await file.download_to_drive(USERS_FILE)
-            print("База users.json успешно восстановлена из Telegram-бэкапа!")
-    except Exception as e:
-        print(f"Не удалось восстановить базу из Telegram: {e}")
-
-
-async def sync_backup_to_telegram(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Фоновая задача: отправляет свежий users.json в админский чат и закрепляет его."""
-    if not os.path.exists(USERS_FILE):
-        return
-    try:
-        users = load_json(USERS_FILE)
-        if not users:
-            return
-
-        with open(USERS_FILE, "rb") as f:
-            msg = await context.bot.send_document(
-                chat_id=ADMIN_ID,
-                document=f,
-                caption=f"📦 Автобэкап базы ({len(users)} пользователей)\n#backup_users",
-                disable_notification=True
-            )
-            # Закрепляем без звука, чтобы при рестарте бот всегда брал самый свежий файл
-            await context.bot.pin_chat_message(
-                chat_id=ADMIN_ID,
-                message_id=msg.message_id,
-                disable_notification=True
-            )
-    except Exception as e:
-        print(f"Ошибка сохранения автобэкапа в Telegram: {e}")
-
 def load_notifications() -> dict:
-    return load_json(NOTIF_FILE)
+    return get_notifs_cache()
 
-def save_notifications(data: dict) -> None:
-    save_json(NOTIF_FILE, data)
+async def save_notification_for_user(user_id: str, notif_data: dict):
+    await save_notif_db(user_id, notif_data)
 
 async def track_user_activity(user, action_name: str) -> None:
     """Фиксирует пользователя и его активность в Neon."""
@@ -316,7 +272,7 @@ WEEK_KEYBOARD = InlineKeyboardMarkup([
 
 def get_profile_data(user_id: int, first_name: str, user_group: str = "Не выбрана") -> tuple[str, str | None]:
     """Возвращает готовый текст профиля и file_id аватарки (если есть)."""
-    users = load_json(USERS_FILE)
+    users = get_users_cache()
     notifs = load_notifications()
 
     u_info = users.get(str(user_id), {})
@@ -417,11 +373,20 @@ async def start_command(
     chat_id = update.effective_chat.id
 
     # 1. Если группа ещё не выбрана — показываем экран онбординга (только 1 кнопка)
-    users = load_json(USERS_FILE)
+    users = get_users_cache()
     u_info = users.get(str(chat_id), {})
-    user_group = context.user_data.get("user_group") or u_info.get("user_group")
+
+    # Восстанавливаем сессию из базы данных
+    user_group = u_info.get("user_group") or context.user_data.get("user_group")
     if user_group:
         context.user_data["user_group"] = user_group
+
+    if u_info.get("subgroup"):
+        context.user_data["subgroup"] = u_info["subgroup"]
+
+    if u_info.get("portal_login"):
+        context.user_data["portal_login"] = u_info["portal_login"]
+        context.user_data["portal_password"] = u_info.get("portal_password")
     if not user_group:
         temp_msg = await update.message.reply_text("⏳", reply_markup=ReplyKeyboardRemove())
         await temp_msg.delete()
@@ -466,7 +431,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.effective_user.id != ADMIN_ID:
         return
 
-    users = load_json(USERS_FILE)
+    users = get_users_cache()
     notifs = load_notifications()
 
     total_users = len(users)
@@ -525,14 +490,18 @@ async def handle_callback(
 
     # Выгрузка базы данных в чат для администратора
     if data == "admin_download_db":
-        if query.from_user.id == ADMIN_ID and os.path.exists(USERS_FILE):
-            with open(USERS_FILE, "rb") as f:
-                await context.bot.send_document(
-                    chat_id=chat_id,
-                    document=f,
-                    filename="users.json",
-                    caption="📁 Актуальная база пользователей бота."
-                )
+        if query.from_user.id == ADMIN_ID:
+            import io
+            users = get_users_cache()
+            json_bytes = json.dumps(users, ensure_ascii=False, indent=2).encode("utf-8")
+            bio = io.BytesIO(json_bytes)
+            bio.name = "users.json"
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=bio,
+                filename="users.json",
+                caption=f" Актуальная база пользователей из Neon ({len(users)} чел.)."
+            )
         return
 
     # 1. Открытие полного расписания из пуш-уведомления
@@ -624,7 +593,7 @@ async def handle_callback(
         return
         # Подменю дедлайнов портала
     if data == "deadline_hub":
-            users = load_json(USERS_FILE)
+            users = get_users_cache()
             user = users.setdefault(str(chat_id), {})
             settings = user.setdefault("deadline_notify", {"new": True, "24h": True, "3h": True})
 
@@ -657,7 +626,7 @@ async def handle_callback(
         # Переключение тумблеров дедлайнов
     if data.startswith("toggle_dl:"):
             key = data.split(":")[1]
-            users = load_json(USERS_FILE)
+            users = get_users_cache()
             user = users.setdefault(str(chat_id), {})
             settings = user.setdefault("deadline_notify", {"new": True, "24h": True, "3h": True})
             if key in settings:
@@ -696,7 +665,7 @@ async def handle_callback(
     # Просмотр списка актуальных дедлайнов
     if data in ("show_deadlines_list", "show_all_deadlines"):
         # 1. Достаем учетные данные пользователя из users.json
-        users = load_json(USERS_FILE)
+        users = get_users_cache()
         user = users.get(str(chat_id), {})
         login = user.get("portal_login") or context.user_data.get("portal_login")
         enc_pw = user.get("portal_password") or context.user_data.get("portal_password")
@@ -846,16 +815,22 @@ async def handle_callback(
         context.user_data["waiting_for_feedback"] = False
         context.user_data["waiting_for_avatar"] = False
         context.user_data["waiting_for_portal_login"] = False
-        context.user_data["waiting_for_portal_password"] = False
+        users = get_users_cache()
+        user_entry = users.get(str(chat_id), {})
 
-        user_group = context.user_data.get("user_group", "Не выбрана")
+        # Восстанавливаем данные из базы в сессию
+        user_group = user_entry.get("user_group") or context.user_data.get("user_group", "Не выбрана")
+        context.user_data["user_group"] = user_group
+        if user_entry.get("subgroup"):
+            context.user_data["subgroup"] = user_entry["subgroup"]
+        if user_entry.get("portal_login"):
+            context.user_data["portal_login"] = user_entry["portal_login"]
+            context.user_data["portal_password"] = user_entry.get("portal_password")
+
         prof_text, avatar_id = get_profile_data(chat_id, query.from_user.first_name, user_group=user_group)
 
-        # 1. ЧИТАЕМ СТАТУС ПОРТАЛА ИЗ БАЗЫ USERS.JSON (и из памяти как резерв)
-        users = load_json(USERS_FILE)
-        user_entry = users.get(str(chat_id), {})
-        db_login = user_entry.get("portal_login") or context.user_data.get("portal_login")
-        db_pw = user_entry.get("portal_password") or context.user_data.get("portal_password")
+        db_login = user_entry.get("portal_login")
+        db_pw = user_entry.get("portal_password")
 
         is_linked = bool(db_login and db_pw)
         reply_markup = get_profile_keyboard(is_linked)
@@ -951,7 +926,7 @@ async def handle_callback(
         context.user_data["waiting_for_group"] = True
 
         # 2. Удаляем группу из файла users.json
-        users = load_json(USERS_FILE)
+        users = get_users_cache()
         uid_str = str(chat_id)
         if uid_str in users:
             users[uid_str].pop("user_group", None)
@@ -967,8 +942,14 @@ async def handle_callback(
         return
 
     elif data == "portal_rating":
-        login = context.user_data.get("portal_login")
-        enc_pw = context.user_data.get("portal_password")
+
+        users = get_users_cache()
+
+        user_entry = users.get(str(chat_id), {})
+
+        login = user_entry.get("portal_login") or context.user_data.get("portal_login")
+
+        enc_pw = user_entry.get("portal_password") or context.user_data.get("portal_password")
 
         if not login or not enc_pw:
             await query.answer("Сначала привяжи аккаунт портала!", show_alert=True)
@@ -1001,7 +982,10 @@ async def handle_callback(
             success, rating_data, grades_dict = False, f"Ошибка дешифрования данных: {e}", {}
 
         if success:
-            users = load_json(USERS_FILE)
+            if success:
+                users = get_users_cache()
+                uid = str(query.from_user.id)
+                prev_grades = users.get(uid, {}).get("last_rating", {})
             uid = str(query.from_user.id)
             prev_grades = users.get(uid, {}).get("last_rating", {})
 
@@ -1065,8 +1049,14 @@ async def handle_callback(
         context.user_data["waiting_for_avatar"] = False
         context.user_data["waiting_for_date"] = False
         context.user_data["waiting_for_feedback"] = False
+
+        users = get_users_cache()
+        user_entry = users.get(str(chat_id), {})
+
         user_name = query.from_user.first_name
-        user_group = context.user_data.get("user_group") or DEFAULT_GROUP
+        user_group = user_entry.get("user_group") or context.user_data.get("user_group") or DEFAULT_GROUP
+        subgroup = user_entry.get("subgroup") or context.user_data.get("subgroup")
+
         text = get_welcome_text(user_name, subgroup, group=user_group)
         reply_markup = get_main_keyboard(subgroup)
         banner_key = "main"
@@ -1087,17 +1077,17 @@ async def handle_callback(
         subgroup = val
 
         # Сохраняем подгруппу в базу пользователей (для личного кабинета)
-        users = load_json(USERS_FILE)
+        users = get_users_cache()
         uid = str(chat_id)
         if uid in users:
             users[uid]["subgroup"] = val
             await save_user_db(str(chat_id), users[str(chat_id)])
 
         # Сохраняем в уведомления
-        notifs = load_notifications()
+        notifs = get_notifs_cache()
         if uid in notifs:
             notifs[uid]["subgroup"] = val
-            save_notifications(notifs)
+            await save_notif_db(uid, notifs[uid])
 
         user_name = query.from_user.first_name
         current_group = context.user_data.get("user_group") or DEFAULT_GROUP
@@ -1359,7 +1349,7 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # 4. Сохраняем группу
         context.user_data["user_group"] = entered_group
         # Сохраняем группу в users.json
-        users = load_json(USERS_FILE)
+        users = get_users_cache()
         uid_str = str(chat_id)
         if uid_str not in users:
             users[uid_str] = {}
@@ -1502,7 +1492,7 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
             if success:
                 enc_pw = encrypt_password(password)
-                users = load_json(USERS_FILE)
+                users = get_users_cache()
                 user_entry = users.setdefault(str(chat_id), {})
                 user_entry["portal_login"] = login
                 user_entry["portal_password"] = enc_pw
@@ -1684,11 +1674,15 @@ def run_fake_server():
         except Exception:
             pass
 
-        users = load_json(USERS_FILE)
+        users = get_users_cache()
         uid = str(user.id)
         if uid not in users:
-            await track_user_activity(user, "set_avatar")
-            users = load_json(USERS_FILE)
+            await track_user_activity(user, action_name="set_avatar")
+            users = get_users_cache()
+
+        if uid not in users:
+            users[uid] = {}
+        users[uid]["avatar_file_id"] = avatar_file_id
 
         users[uid]["avatar_file_id"] = avatar_file_id
         await save_user_db(str(chat_id), users[str(chat_id)])
@@ -1734,12 +1728,14 @@ async def handle_user_photo(
     except Exception:
         pass
 
-    users = load_json(USERS_FILE)
+    users = get_users_cache()
     uid = str(user.id)
     if uid not in users:
-        await track_user_activity(user, "set_avatar")
-        users = load_json(USERS_FILE)
+        await track_user_activity(user, action_name="set_avatar")
+        users = get_users_cache()
 
+    if uid not in users:
+        users[uid] = {}
     users[uid]["avatar_file_id"] = avatar_file_id
     await save_user_db(str(chat_id), users[str(chat_id)])
     context.user_data["waiting_for_avatar"] = False
@@ -1784,7 +1780,7 @@ async def show_notifications_hub(query, context):
 
 async def show_deadline_settings(query, context, toggle_key=None):
     user_id = str(query.from_user.id)
-    users = load_json(USERS_FILE)
+    users = get_users_cache()
     user = users.setdefault(user_id, {})
 
     settings = user.setdefault("deadline_notify", {
@@ -1819,7 +1815,7 @@ async def show_deadline_settings(query, context, toggle_key=None):
 
 async def show_schedule_notify_settings(query, context, toggle_key=None):
     user_id = str(query.from_user.id)
-    users = load_json(USERS_FILE)
+    users = get_users_cache()
     user = users.setdefault(user_id, {})
 
     settings = user.setdefault("schedule_notify", {
@@ -1861,7 +1857,6 @@ def main() -> None:
     try:
         if app.job_queue:
             app.job_queue.run_repeating(send_daily_notifications, interval=60, first=10)
-            #app.job_queue.run_repeating(sync_backup_to_telegram, interval=900, first=30)
     except Exception as e:
         print(f"[WARN] Не удалось запустить фоновые задачи: {e}")
 
