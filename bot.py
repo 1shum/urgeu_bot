@@ -693,7 +693,7 @@ async def handle_callback(
     # Просмотр списка актуальных дедлайнов прямо из бота
     # Просмотр списка актуальных дедлайнов
     # Просмотр списка актуальных дедлайнов
-    if data == "show_deadlines_list":
+    if data in ("show_deadlines_list", "show_all_deadlines"):
         # 1. Достаем учетные данные пользователя из users.json
         users = load_json(USERS_FILE)
         user = users.get(str(chat_id), {})
@@ -752,12 +752,23 @@ async def handle_callback(
                     "Все тесты и задания сданы или преподаватели ещё не выложили новые работы."
                 )
             else:
-                text = "📋 *АКТИВНЫЕ ДЕДЛАЙНЫ (ПО ПРЕДМЕТАМ)*:\n" + ("─" * 28) + "\n\n"
+                # Проверяем, нажата ли кнопка "Показать остальные"
+                show_all = (data == "show_all_deadlines")
+
+                # Сортируем все дедлайны по времени (сначала самые горящие)
+                deadlines.sort(key=lambda x: x.get("timestamp", 0))
+
+                total_count = len(deadlines)
+                limit = 7 if not show_all else total_count
+                visible_deadlines = deadlines[:limit]
+
+                text = f"📋 *АКТИВНЫЕ ДЕДЛАЙНЫ* (показано {len(visible_deadlines)} из {total_count}):\n" + (
+                            "─" * 28) + "\n\n"
                 now = datetime.now()
 
-                # Группируем дедлайны по предметам (курсам)
+                # Группируем видимые дедлайны по предметам
                 grouped = {}
-                for d in deadlines:
+                for d in visible_deadlines:
                     c_name = d.get("course", "Курс")
                     if c_name not in grouped:
                         grouped[c_name] = []
@@ -783,14 +794,26 @@ async def handle_callback(
                                 pass
 
                         icon = "🧪" if "тест" in t_type.lower() else "📝"
-
-                        # Веточки списка
                         is_last = (i == len(items) - 1)
                         prefix = "  └ " if is_last else "  ├ "
 
                         text += f"{prefix}{icon} {t_name} — ⏳ __{d_str}__{left_str}\n"
                     text += "\n"
 
+                # Формируем клавиатуру с кнопкой разворота/сворачивания
+                buttons = []
+                if total_count > 7:
+                    if not show_all:
+                        remaining = total_count - 7
+                        buttons.append([InlineKeyboardButton(f"📂 Показать остальные (ещё {remaining})",
+                                                             callback_data="show_all_deadlines")])
+                    else:
+                        buttons.append([InlineKeyboardButton("🔼 Свернуть список", callback_data="show_deadlines_list")])
+
+                buttons.append([
+                    InlineKeyboardButton("🔄 Обновить", callback_data="show_deadlines_list"),
+                    InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")
+                ])
             buttons = [
                 [InlineKeyboardButton("🔄 Обновить", callback_data="show_deadlines_list")],
                 [InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")]
