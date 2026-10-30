@@ -1,6 +1,7 @@
 from db import get_users_cache, save_user_db, init_db, get_notifs_cache, save_notif_db
 import json
 import os
+import asyncio
 import re
 import threading
 from portal import check_portal_auth, get_portal_rating, encrypt_password, decrypt_password, fetch_portal_deadlines
@@ -469,6 +470,45 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда для рассылки всем пользователям бота (только для админа)"""
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    # Берем текст, который ты напишешь после команды /broadcast
+    text_to_send = update.message.text.replace("/broadcast", "").strip()
+
+    if not text_to_send:
+        await update.message.reply_text("❌ Использование: `/broadcast <текст>`", parse_mode="Markdown")
+        return
+
+    users = get_users_cache()
+    await update.message.reply_text(f"⏳ Начинаю рассылку для {len(users)} пользователей...")
+
+    success_count = 0
+    error_count = 0
+
+    for user_id in users.keys():
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=text_to_send,
+                parse_mode="Markdown"
+            )
+            success_count += 1
+            import asyncio
+            await asyncio.sleep(0.05)
+        except Exception as e:
+            error_count += 1
+            print(f"Ошибка отправки пользователю {user_id}: {e}")
+
+    await update.message.reply_text(
+        f"✅ **Рассылка завершена!**\n"
+        f"Успешно доставлено: {success_count}\n"
+        f"Ошибок: {error_count}",
+        parse_mode="Markdown"
+    )
 # --- CALLBACK QUERY HANDLER ---
 async def handle_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -1863,6 +1903,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("stats", admin_command))
+    app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_user_photo))
