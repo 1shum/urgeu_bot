@@ -34,7 +34,7 @@ from telegram.ext import (
     filters,
 )
 
-BOT_TOKEN = os.environ["8970456575:AAFUoFW-hT0pcNJE0mfE3Xzx_Wq9-pkFU40"]
+BOT_TOKEN = os.environ["BOT_TOKEN"]
 DEFAULT_GROUP = "ПИЭ-26-2"
 ADMIN_ID = 1087118817  # здесь твой числовой ID
 ADMIN_IDS = [1087118817]
