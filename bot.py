@@ -4,6 +4,8 @@ import os
 import asyncio
 import re
 import threading
+import html
+import httpx
 from portal import check_portal_auth, get_portal_rating, encrypt_password, decrypt_password, fetch_portal_deadlines
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -32,7 +34,7 @@ from telegram.ext import (
     filters,
 )
 
-BOT_TOKEN = "8970456575:AAFUoFW-hT0pcNJE0mfE3Xzx_Wq9-pkFU40"
+BOT_TOKEN = os.environ["BOT_TOKEN"]
 DEFAULT_GROUP = "ПИЭ-26-2"
 ADMIN_ID = 1087118817  # здесь твой числовой ID
 ADMIN_IDS = [ADMIN_ID]
@@ -536,6 +538,66 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         f"Ошибок: {error_count}",
         parse_mode="Markdown"
     )
+
+async def send_rich_html(chat_id: int, html_text: str, reply_markup=None) -> None:
+    """Отправка rich-сообщения напрямую через Bot API (sendRichMessage)."""
+    payload = {"chat_id": chat_id, "rich_message": {"html": html_text}}
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup.to_dict()
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendRichMessage", json=payload
+        )
+    data = resp.json()
+    if not data.get("ok"):
+        raise RuntimeError(data.get("description", "sendRichMessage failed"))
+
+
+def build_rating_html(rating_data: list, prev_grades: dict) -> str:
+    """Собирает красивую таблицу рейтинга в rich-HTML."""
+    rows = []
+    values = []
+    for item in rating_data:
+        subj = html.escape(str(item["name"]))
+        curr_val = item["val"]
+        curr_str = html.escape(str(item["raw_str"]))
+
+        delta = "—"
+        if curr_val is not None:
+            values.append(curr_val)
+            if item["name"] in prev_grades:
+                diff = round(curr_val - prev_grades[item["name"]], 2)
+                if diff > 0:
+                    delta = f"📈 +{diff}%"
+                elif diff < 0:
+                    delta = f"📉 {diff}%"
+
+        rows.append(
+            f'<tr><td>{subj}</td>'
+            f'<td align="center"><b>{curr_str}</b></td>'
+            f'<td align="center">{delta}</td></tr>'
+        )
+
+    table = (
+        '<table bordered striped>'
+        '<tr><th>Предмет</th><th>Баллы</th><th>Динамика</th></tr>'
+        + "".join(rows) +
+        '</table>'
+    )
+
+    summary = ""
+    if values:
+        avg = round(sum(values) / len(values), 1)
+        summary = f"<p>📊 Средний результат: <b>{avg}%</b></p>"
+
+    now = datetime.now(ZoneInfo("Asia/Yekaterinburg")).strftime("%d.%m.%Y %H:%M")
+    return (
+        "<h3>🏆 Академический рейтинг</h3>"
+        f"{table}{summary}"
+        f"<footer>Обновлено: {now}</footer>"
+    )
+
+
 # --- CALLBACK QUERY HANDLER ---
 async def handle_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -1082,7 +1144,7 @@ async def handle_callback(
         context.user_data["group_prompt_msg_id"] = prompt_msg.message_id
         return
 
-    elif data == "portal_rating":
+    elif data in ("portal_rating", "portal_rating_refresh"):
 
         users = get_users_cache()
 
@@ -1096,25 +1158,16 @@ async def handle_callback(
             await query.answer("Сначала привяжи аккаунт портала!", show_alert=True)
             return
 
-        prev_msg_text = query.message.text or ""
-        if "успешно привязан" in prev_msg_text:
+        if data == "portal_rating_refresh" or "успешно привязан" in (query.message.text or ""):
             try:
                 await query.message.delete()
             except Exception:
                 pass
-            status_msg = await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text="⏳ <b>Подключаюсь к порталу УрГЭУ и считаю баллы...</b>",
-                parse_mode="HTML"
-            )
-        elif "Рейтинг" in prev_msg_text or "академический" in prev_msg_text:
-            status_msg = query.message
-            await status_msg.edit_text("⏳ <b>Обновляю баллы с портала УрГЭУ...</b>", parse_mode="HTML")
-        else:
-            status_msg = await query.message.reply_text(
-                "⏳ <b>Подключаюсь к порталу УрГЭУ и считаю баллы...</b>",
-                parse_mode="HTML"
-            )
+        status_msg = await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="⏳ <b>Подключаюсь к порталу УрГЭУ и считаю баллы...</b>",
+            parse_mode="HTML"
+        )
 
         try:
             raw_password = decrypt_password(enc_pw)
@@ -1122,46 +1175,38 @@ async def handle_callback(
         except Exception as e:
             success, rating_data, grades_dict = False, f"Ошибка дешифрования данных: {e}", {}
 
-        if success:
-            if success:
-                users = get_users_cache()
-                uid = str(query.from_user.id)
-                prev_grades = users.get(uid, {}).get("last_rating", {})
-            uid = str(query.from_user.id)
-            prev_grades = users.get(uid, {}).get("last_rating", {})
-
-            lines = ["<b>Текущий академический рейтинг:</b>\n"]
-            for item in rating_data:
-                subj = item["name"]
-                curr_val = item["val"]
-                curr_str = item["raw_str"]
-
-                delta_text = ""
-                if curr_val is not None and subj in prev_grades:
-                    prev_val = prev_grades[subj]
-                    diff = round(curr_val - prev_val, 2)
-                    if diff > 0:
-                        delta_text = f" (📈 +{diff}%)"
-                    elif diff < 0:
-                        delta_text = f" (📉 {diff}%)"
-
-                lines.append(f"• <b>{subj}</b> — <code>{curr_str}</code>{delta_text}")
-
-            text = "\n".join(lines)
-
-            # Сохраняем свежие баллы в базу для следующего сравнения
-            if uid in users:
-                users[uid]["last_rating"] = grades_dict
-                await save_user_db(str(chat_id), users[str(chat_id)])
-        else:
-            text = str(rating_data)
-
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Обновить", callback_data="portal_rating")],
+            [InlineKeyboardButton("🔄 Обновить", callback_data="portal_rating_refresh")],
             [InlineKeyboardButton("✖️ Закрыть рейтинг", callback_data="close_rating")]
         ])
 
-        await status_msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        if success:
+            users = get_users_cache()
+            uid = str(query.from_user.id)
+            prev_grades = users.get(uid, {}).get("last_rating", {})
+
+            rating_html = build_rating_html(rating_data, prev_grades)
+
+            # сохраняем свежие баллы для следующего сравнения
+            if uid in users:
+                users[uid]["last_rating"] = grades_dict
+                await save_user_db(uid, users[uid])
+
+            try:
+                await send_rich_html(query.message.chat_id, rating_html, reply_markup=kb)
+                await status_msg.delete()
+            except Exception as e:
+                # запасной вариант: старый вид, если rich не сработал
+                print(f"[WARN] rich rating failed: {e}")
+                lines = ["<b>Текущий академический рейтинг:</b>\n"]
+                for item in rating_data:
+                    lines.append(
+                        f"• <b>{html.escape(str(item['name']))}</b> — "
+                        f"<code>{html.escape(str(item['raw_str']))}</code>"
+                    )
+                await status_msg.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+        else:
+            await status_msg.edit_text(html.escape(str(rating_data)), parse_mode="HTML", reply_markup=kb)
         return
 
     elif data == "close_rating":
