@@ -356,6 +356,12 @@ async def send_daily_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
                         "📖 Полное расписание",
                         callback_data=f"show_full_{tomorrow_date_str}"
                     )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "✖️ Скрыть уведомление",
+                        callback_data="close_daily_notif"
+                    )
                 ]
             ])
 
@@ -591,6 +597,13 @@ async def handle_callback(
         return
 
     context.user_data["main_menu_msg_id"] = query.message.message_id
+
+    if data == "close_daily_notif":
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        return
 
     # 3. Меню настроек уведомлений
     # 3. Меню управления всеми уведомлениями (Хаб)
