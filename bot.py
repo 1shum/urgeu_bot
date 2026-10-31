@@ -172,24 +172,21 @@ def get_main_keyboard(subgroup: int = None) -> InlineKeyboardMarkup:
 
     return InlineKeyboardMarkup(buttons)
 
+
 def get_notif_keyboard(current_time: str = None) -> InlineKeyboardMarkup:
-    """Клавиатура выбора времени пуш-уведомлений."""
-    times = ["18:00", "19:00", "20:00", "21:00", "22:00"]
+    times = ["19:00", "20:00", "21:00"]
+    buttons = []
+
     row = []
     for t in times:
-        label = f"✅ {t}" if t == current_time else t
-        row.append(InlineKeyboardButton(label, callback_data=f"set_notif_{t}"))
+        mark = "✅ " if t == current_time else ""
+        row.append(InlineKeyboardButton(f"{mark}{t}", callback_data=f"set_notif_{t}"))
+    buttons.append(row)
 
-    return InlineKeyboardMarkup([
-        row[:3],
-        row[3:],
-        [
-            InlineKeyboardButton("🔕 Отключить уведомления", callback_data="set_notif_off")
-        ],
-        [
-            InlineKeyboardButton("◀️ Главное меню", callback_data="main_menu")
-        ]
-    ])
+    buttons.append([InlineKeyboardButton("✍️ Ввести свое время", callback_data="set_notif_custom")])
+    buttons.append([InlineKeyboardButton("❌ Выключить", callback_data="set_notif_off")])
+
+    return InlineKeyboardMarkup(buttons)
 
 def get_profile_keyboard(is_portal_linked: bool = False) -> InlineKeyboardMarkup:
     buttons = [
@@ -323,6 +320,10 @@ async def send_daily_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Проверяет пользователей каждую минуту и присылает пуш в заданное время."""
     now = datetime.now(TIMEZONE)
     current_time_str = now.strftime("%H:%M")
+
+    # --- ДОБАВЬ ВОТ ЭТИ ДВЕ СТРОЧКИ ---
+    print(f"[NOTIF DEBUG] Проверка времени: {current_time_str}")
+    # -----------------------------------
 
     notifs = load_notifications()
     if not notifs:
@@ -604,7 +605,40 @@ async def handle_callback(
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
         return
+    elif data.startswith("set_notif_"):
+        val = data.replace("set_notif_", "")
+        uid = str(chat_id)
 
+        # Если юзер нажал "Ввести свое время"
+        if val == "custom":
+            context.user_data["waiting_for_notif_time"] = True
+            await query.answer()
+            await query.edit_message_caption(
+                caption="⏳ Напишите желаемое время (ЧЧ:ММ):",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Отмена", callback_data="notif_menu")]])
+            )
+            return
+
+        notifs = get_notifs_cache()
+        if uid not in notifs:
+            notifs[uid] = {}
+
+        if val == "off":
+            notifs[uid]["enabled"] = False
+            notifs[uid]["time"] = None
+            await query.answer("Уведомления выключены 🔕")
+        else:
+            notifs[uid]["enabled"] = True
+            notifs[uid]["time"] = val
+            await query.answer(f"Время установлено на {val} ✅")
+
+        from db import save_notif_db
+        await save_notif_db(uid, notifs[uid])
+
+        # Обновляем меню
+        query.data = "notif_menu"
+        await handle_callback(update, context)
+        return
     # Подменю настройки пар (твое прежнее меню)
     if data == "pairs_notif_menu":
         notifs = load_notifications()
@@ -1127,6 +1161,7 @@ async def handle_callback(
         notifs = get_notifs_cache()
         if uid in notifs:
             notifs[uid]["subgroup"] = val
+            from db import save_notif_db
             await save_notif_db(uid, notifs[uid])
 
         user_name = query.from_user.first_name
