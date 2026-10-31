@@ -2,6 +2,7 @@ import html as html_lib
 import os
 import traceback
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from urllib.parse import urljoin
 import aiohttp
 from bs4 import BeautifulSoup
@@ -9,14 +10,11 @@ from cryptography.fernet import Fernet
 
 PORTAL_LOGIN_URL = "https://portal.usue.ru/portal/xlogin"
 PORTAL_BASE_URL = "https://portal.usue.ru/portal"
-PORTAL_PROXY = "http://p7Se6A:zxDB5D@160.116.216.13:8000"
+PORTAL_PROXY = os.environ["PORTAL_PROXY"]  # формат: http://логин:пароль@ip:порт (задаётся в Render → Environment)
 
-# Ключ шифрования. Для продакшена на Render добавь переменную окружения PORTAL_SECRET_KEY
-SECRET_KEY = os.getenv("PORTAL_SECRET_KEY")
-if not SECRET_KEY:
-    SECRET_KEY = b"kXwB7D0_G0yFq2u91lQzX7_zUqE8yS4v1_L0M5wN6rM="
-else:
-    SECRET_KEY = SECRET_KEY.encode()
+# Ключ шифрования паролей. Обязательно задаётся переменной окружения PORTAL_SECRET_KEY (Render → Environment).
+# Если поменять ключ, ранее сохранённые пароли пользователей не расшифруются — им придётся заново привязать портал.
+SECRET_KEY = os.environ["PORTAL_SECRET_KEY"].strip().encode()
 
 cipher = Fernet(SECRET_KEY)
 
@@ -282,7 +280,7 @@ async def fetch_portal_deadlines(login, password):
     }
 
     results = []
-    now = datetime.now()
+    now = datetime.now(ZoneInfo("Asia/Yekaterinburg")).replace(tzinfo=None)
 
     print(f"[DEBUG AUTH] Логин: '{login}', длина пароля: {len(password) if password else 0}")
 

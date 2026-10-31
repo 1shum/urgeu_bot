@@ -598,6 +598,95 @@ def build_rating_html(rating_data: list, prev_grades: dict) -> str:
     )
 
 
+
+def _visible_len(t: str) -> int:
+    """Длина текста без HTML-тегов (именно её считает Telegram для лимитов)."""
+    return len(html.unescape(re.sub(r"<[^>]+>", "", t)))
+
+
+def _deadline_kind(d: dict) -> tuple[str, str]:
+    """Возвращает (иконка, подпись): Тест / Задание / иное."""
+    raw = str(d.get("type") or "").strip()
+    t = raw.lower()
+    if "тест" in t or "quiz" in t:
+        return "🧪", "Тест"
+    if "задан" in t or "assign" in t:
+        return "📝", "Задание"
+    if not t and "тест" in str(d.get("title") or "").lower():
+        return "🧪", "Тест"
+    return "📌", (raw or "Работа")
+
+
+def _urgency(dt: datetime, now: datetime) -> tuple[str, str]:
+    """Цветная метка срочности и текст «осталось»."""
+    secs = int((dt - now).total_seconds())
+    if secs < 0:
+        return "⚫", "просрочено"
+    days, rem = divmod(secs, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days:
+        left = f"{days}д {hours}ч"
+    elif hours:
+        left = f"{hours}ч {minutes}м"
+    else:
+        left = f"{minutes}м"
+    if secs < 3 * 3600:
+        mark = "🔴"
+    elif secs < 24 * 3600:
+        mark = "🟠"
+    elif secs < 3 * 86400:
+        mark = "🟡"
+    else:
+        mark = "🟢"
+    return mark, f"ост. {left}"
+
+
+def build_deadlines_html(items: list, total_count: int, max_len: int = 3900) -> str:
+    """Собирает список дедлайнов в HTML: курс → блок цитаты с работами."""
+    now = datetime.now(TIMEZONE).replace(tzinfo=None)
+
+    grouped = {}
+    for d in items:
+        grouped.setdefault(d.get("course") or "Курс", []).append(d)
+
+    text = f"📋 <b>Активные дедлайны</b> · {len(items)} из {total_count}\n\n"
+    shown = 0
+    for course, works in grouped.items():
+        lines = []
+        for d in works:
+            icon, kind = _deadline_kind(d)
+            title = html.escape(str(d.get("title") or "Без названия"))
+
+            when = "срок не указан"
+            iso = d.get("deadline_iso")
+            if iso:
+                try:
+                    dt = datetime.fromisoformat(iso)
+                    if dt.tzinfo:
+                        dt = dt.astimezone(TIMEZONE).replace(tzinfo=None)
+                    mark, left = _urgency(dt, now)
+                    when = f"{mark} {dt:%d.%m %H:%M} · {left}"
+                except Exception:
+                    pass
+            lines.append(f"{icon} <b>{kind}:</b> {title}\n{when}")
+
+        block = (
+            f"📚 <b>{html.escape(str(course))}</b>\n"
+            f"<blockquote>{chr(10).join(chr(10) + l if i else l for i, l in enumerate(lines))}</blockquote>\n"
+        )
+        if _visible_len(text + block) > max_len:
+            text += f"… и ещё {len(items) - shown} шт. не поместилось"
+            return text
+        text += block
+        shown += len(works)
+
+    legend = "<i>🔴 &lt;3ч · 🟠 &lt;24ч · 🟡 &lt;3 дн · 🟢 позже</i>"
+    if _visible_len(text + legend) <= max_len:
+        text += legend
+    return text
+
+
 # --- CALLBACK QUERY HANDLER ---
 async def handle_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -752,11 +841,28 @@ async def handle_callback(
             "Привяжите аккаунт, чтобы смотреть свои дедлайны по предметам и текущий рейтинг прямо в боте."
         )
 
-        await query.edit_message_caption(
-            caption=text,
-            reply_markup=get_portal_keyboard(is_linked),
-            parse_mode="Markdown"
-        )
+        try:
+            await query.edit_message_caption(
+                caption=text,
+                reply_markup=get_portal_keyboard(is_linked),
+                parse_mode="Markdown"
+            )
+        except BadRequest as e:
+            if "not modified" in str(e).lower():
+                return
+            # текущее сообщение без фото (длинный список) — пересоздаём меню с баннером
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            with open(BANNERS["main"], "rb") as photo:
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo,
+                    caption=text,
+                    parse_mode="Markdown",
+                    reply_markup=get_portal_keyboard(is_linked),
+                )
         return
     # Подменю настройки пар (твое прежнее меню)
     if data == "pairs_notif_menu":
@@ -908,8 +1014,7 @@ async def handle_callback(
 
             if not deadlines:
                 text = (
-                    "🎉 **Горящих дедлайнов нет!**\n"
-                    "─\n"
+                    "🎉 <b>Горящих дедлайнов нет!</b>\n\n"
                     "Все тесты и задания сданы или преподаватели ещё не выложили новые работы."
                 )
                 buttons = [
@@ -926,46 +1031,7 @@ async def handle_callback(
                 limit = 7 if not show_all else total_count
                 visible_deadlines = deadlines[:limit]
 
-                text = f"📋 *АКТИВНЫЕ ДЕДЛАЙНЫ* (топ {len(visible_deadlines)} из {total_count}):\n" + ("─" * 28) + "\n\n"
-                now = datetime.now()
-
-                grouped = {}
-                for d in visible_deadlines:
-                    c_name = d.get("course", "Курс")
-                    if c_name not in grouped:
-                        grouped[c_name] = []
-                    grouped[c_name].append(d)
-
-                for c_name, items in grouped.items():
-                    text += f"📚 *{c_name}*\n"
-                    for i, d in enumerate(items):
-                        t_name = d.get("title", "Работа")
-                        t_type = d.get("type", "Тест")
-
-                        # Компактный парсинг даты: без года, дата и оставшееся время в одну строку
-                        iso_val = d.get("deadline_iso")
-                        date_display = "Срок не указан"
-                        left_str = ""
-
-                        if iso_val:
-                            try:
-                                dt = datetime.fromisoformat(iso_val)
-                                date_display = dt.strftime("%d.%m %H:%M")
-
-                                diff = dt - now
-                                days = diff.days
-                                hours = int(diff.seconds // 3600)
-                                left_str = f" • ост. {days}д {hours}ч" if days > 0 else f" • ост. {hours}ч"
-                            except Exception:
-                                pass
-
-                        icon = "🧪" if "тест" in t_type.lower() else "📝"
-                        is_last = (i == len(items) - 1)
-                        branch = "└" if is_last else "├"
-
-                        text += f" {branch} {icon} *{t_name}*\n"
-                        text += f"    ⏳ `{date_display}`{left_str}\n"
-                    text += "\n"
+                text = build_deadlines_html(visible_deadlines, total_count)
 
                 # Клавиатура с кнопкой разворота
                 buttons = []
@@ -984,22 +1050,28 @@ async def handle_callback(
 
         except Exception as err:
             print(f"[ERROR] Ошибка сбора дедлайнов: {err}")
-            text = f"❌ Ошибка при обращении к порталу:\n{err}"
+            text = f"❌ Ошибка при обращении к порталу:\n{html.escape(str(err))}"
             buttons = [
                 [InlineKeyboardButton("🔄 Попробовать снова", callback_data="show_deadlines_list")],
-                InlineKeyboardButton("🔙 Назад в портал", callback_data="portal_menu")
+                [InlineKeyboardButton("🔙 Назад в портал", callback_data="portal_menu")]
             ]
-        if len(text) > 1000:
-            await query.message.delete()
+
+        # Подпись к фото ограничена 1024 символами: длинный список шлём обычным сообщением
+        if _visible_len(text) > 1000:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=text[:4000],
+                text=text,
+                parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
         else:
             with open(BANNERS["main"], "rb") as photo:
                 await query.edit_message_media(
-                    media=InputMediaPhoto(media=photo, caption=text),
+                    media=InputMediaPhoto(media=photo, caption=text, parse_mode="HTML"),
                     reply_markup=InlineKeyboardMarkup(buttons)
                 )
         return
