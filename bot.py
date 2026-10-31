@@ -369,7 +369,7 @@ async def send_daily_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=short_text,
-                    parse_mode="Markdown",
+                    parse_mode='Markdown',
                     reply_markup=keyboard,
                 )
             except Exception as e:
@@ -506,11 +506,23 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     for user_id in users.keys():
         try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=text_to_send,
-                parse_mode="Markdown"
-            )
+            broadcast_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✖️ Скрыть объявление", callback_data="close_broadcast")]
+            ])
+
+            for user_id in users.keys():
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=text_to_send,
+                        parse_mode="Markdown",
+                        reply_markup=broadcast_kb
+                    )
+                    success_count += 1
+                    await asyncio.sleep(0.05)
+                except Exception as e:
+                    error_count += 1
+                    print(f"Ошибка отправки пользователю {user_id}: {e}")
             success_count += 1
             import asyncio
             await asyncio.sleep(0.05)
@@ -598,13 +610,12 @@ async def handle_callback(
 
     context.user_data["main_menu_msg_id"] = query.message.message_id
 
-    if data == "close_daily_notif":
+    if data in ("close_daily_notif", "close_broadcast"):
         try:
             await query.message.delete()
         except Exception:
             pass
         return
-
     # 3. Меню настроек уведомлений
     # 3. Меню управления всеми уведомлениями (Хаб)
     if data == "notif_menu":
