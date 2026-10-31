@@ -1394,12 +1394,40 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user = update.effective_user
     text = update.message.text.strip()
     # 0. Ввод группы (онбординг или смена группы)
+
+    # --- 1. ПРОВЕРКА ВВОДА ВРЕМЕНИ ДЛЯ УВЕДОМЛЕНИЙ ---
+    if context.user_data.get("waiting_for_notif_time"):
+        import re
+        if re.match(r"^([01]?[0-9]|2[0-3]):[0-5][0-9]$", text):
+            uid = str(update.effective_user.id)
+            from db import get_notifs_cache, save_notif_db
+            notifs = get_notifs_cache()
+
+            if uid not in notifs:
+                notifs[uid] = {}
+
+            notifs[uid]["enabled"] = True
+
+            parts = text.split(':')
+            formatted_time = f"{int(parts[0]):02d}:{parts[1]}"
+            notifs[uid]["time"] = formatted_time
+
+            await save_notif_db(uid, notifs[uid])
+
+            context.user_data["waiting_for_notif_time"] = False
+            await update.message.reply_text(f"✅ Время ежедневных уведомлений установлено на {formatted_time}!")
+        else:
+            await update.message.reply_text("❌ Ошибка формата. Введите время в формате ЧЧ:ММ (например, 20:30).")
+        return  # <-- КРИТИЧЕСКИ ВАЖНО! Это остановит код, и он не пойдет создавать тикет
+    # -------------------------------------------------
+
+
     if context.user_data.get("waiting_for_group"):
         # 1. Удаляем сообщение пользователя с названием группы
         try:
             await update.message.delete()
         except Exception:
-            pass
+            passч
 
         # 2. Удаляем сообщение бота "Введи номер своей группы"
         prompt_id = context.user_data.pop("group_prompt_msg_id", None)
