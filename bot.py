@@ -181,14 +181,10 @@ def get_portal_keyboard(is_linked: bool) -> InlineKeyboardMarkup:
     buttons = []
 
     if not is_linked:
-        buttons.append([InlineKeyboardButton("🔗 Привязать портал",
-                                             callback_data="portal_bind")])  # Проверь, так ли называется твоя привязка
+        buttons.append([InlineKeyboardButton("🔗 Привязать портал", callback_data="portal_bind")])
     else:
-        # ЗАМЕНИЛ view_deadlines на portal_deadlines (убедись, что твой обработчик дедлайнов называется именно так, или впиши нужное)
-        buttons.append([InlineKeyboardButton("📅 Мои дедлайны", callback_data="portal_deadlines")])
-        # ЗАМЕНИЛ view_rating на portal_rating
+        buttons.append([InlineKeyboardButton("📅 Мои дедлайны", callback_data="show_deadlines_list")])
         buttons.append([InlineKeyboardButton("🏆 Мой рейтинг", callback_data="portal_rating")])
-        # ЗАМЕНИЛ unlink_portal на portal_unbind
         buttons.append([InlineKeyboardButton("❌ Отвязать портал", callback_data="portal_unbind")])
 
     buttons.append([InlineKeyboardButton("◀️ Главное меню", callback_data="main_menu")])
@@ -721,7 +717,6 @@ async def handle_callback(
                 "• **За 3 часа** — срочное предупреждение.\n"
             )
             buttons = [
-                [InlineKeyboardButton("📋 Посмотреть активные дедлайны", callback_data="show_deadlines_list")],
                 [InlineKeyboardButton(btn_new, callback_data="toggle_dl:new"),
                  InlineKeyboardButton(btn_24h, callback_data="toggle_dl:24h")],
                 [InlineKeyboardButton(btn_3h, callback_data="toggle_dl:3h")],
@@ -757,7 +752,6 @@ async def handle_callback(
                 "• **За 3 часа** — срочное предупреждение.\n"
             )
             buttons = [
-                [InlineKeyboardButton("📋 Посмотреть активные дедлайны", callback_data="show_deadlines_list")],
                 [InlineKeyboardButton(btn_new, callback_data="toggle_dl:new"),
                  InlineKeyboardButton(btn_24h, callback_data="toggle_dl:24h")],
                 [InlineKeyboardButton(btn_3h, callback_data="toggle_dl:3h")],
@@ -795,8 +789,8 @@ async def handle_callback(
                 "Чтобы просматривать задания и тесты, перейди в **Личный кабинет** и привяжи аккаунт портала УрГЭУ."
             )
             buttons = [
-                [InlineKeyboardButton("👤 В Личный кабинет", callback_data="profile_menu")],
-                [InlineKeyboardButton("🔙 Назад", callback_data="deadline_hub")]
+                [InlineKeyboardButton("🔗 Привязать портал", callback_data="portal_bind")],
+                [InlineKeyboardButton("🔙 Назад в портал", callback_data="portal_menu")]
             ]
             with open(BANNERS["main"], "rb") as photo:
                 await query.edit_message_media(
@@ -832,6 +826,10 @@ async def handle_callback(
                     "─\n"
                     "Все тесты и задания сданы или преподаватели ещё не выложили новые работы."
                 )
+                buttons = [
+                    [InlineKeyboardButton("🔄 Обновить", callback_data="show_deadlines_list")],
+                    [InlineKeyboardButton("🔙 Назад в портал", callback_data="portal_menu")]
+                ]
             else:
                 show_all = (data == "show_all_deadlines")
 
@@ -895,7 +893,7 @@ async def handle_callback(
 
                 buttons.append([
                     InlineKeyboardButton("🔄 Обновить", callback_data="show_deadlines_list"),
-                    InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")
+                    InlineKeyboardButton("🔙 Назад в портал", callback_data="portal_menu")
                 ])
 
         except Exception as err:
@@ -903,7 +901,7 @@ async def handle_callback(
             text = f"❌ Ошибка при обращении к порталу:\n{err}"
             buttons = [
                 [InlineKeyboardButton("🔄 Попробовать снова", callback_data="show_deadlines_list")],
-                [InlineKeyboardButton("🔙 Назад в настройки", callback_data="deadline_hub")]
+                InlineKeyboardButton("🔙 Назад в портал", callback_data="portal_menu")
             ]
         if len(text) > 1000:
             await query.message.delete()
