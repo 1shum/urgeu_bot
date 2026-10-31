@@ -148,27 +148,50 @@ async def track_user_activity(user, action_name: str) -> None:
 def get_main_keyboard(subgroup: int = None) -> InlineKeyboardMarkup:
     buttons = [
         [
-            InlineKeyboardButton("📅 Сегодня", callback_data="today"),
-            InlineKeyboardButton("📆 Завтра", callback_data="tomorrow"),
+            InlineKeyboardButton(text="📅 Сегодня", callback_data="today"),
+            InlineKeyboardButton(text="📅 Завтра", callback_data="tomorrow"),
         ],
         [
-            InlineKeyboardButton("🗓 Текущая неделя", callback_data="week_current"),
-            InlineKeyboardButton("📆 Выбрать день", callback_data="pick_date"),
+            InlineKeyboardButton(text="🗓 Текущая неделя", callback_data="week_current"),
+            InlineKeyboardButton(text="📆 Выбрать день", callback_data="pick_date"),
         ],
         [
-            InlineKeyboardButton("👤 Личный кабинет", callback_data="profile_menu"),
-            InlineKeyboardButton("🔔 Уведомления", callback_data="notif_menu"),
+            InlineKeyboardButton(text="👤 Личный кабинет", callback_data="profile_menu"),
+            InlineKeyboardButton(text="🔔 Уведомления", callback_data="notif_menu"),
         ],
+        [
+            # Добавляем кнопку портала отдельным рядом
+            InlineKeyboardButton(text="🌐 Портал УрГЭУ", callback_data="portal_menu")
+        ]
     ]
 
     if not subgroup:
         buttons.append([
-            InlineKeyboardButton("➕ Добавить подгруппу", callback_data="choose_subgroup")
+            InlineKeyboardButton(text="➕ Добавить подгруппу", callback_data="choose_subgroup")
         ])
 
     buttons.append([
-        InlineKeyboardButton("💬 Поддержка / Идеи", callback_data="feedback")
+        InlineKeyboardButton(text="💬 Поддержка / Идеи", callback_data="feedback")
     ])
+
+    return InlineKeyboardMarkup(buttons)
+
+
+def get_portal_keyboard(is_linked: bool) -> InlineKeyboardMarkup:
+    buttons = []
+
+    if not is_linked:
+        buttons.append([InlineKeyboardButton("🔗 Привязать портал",
+                                             callback_data="portal_bind")])  # Проверь, так ли называется твоя привязка
+    else:
+        # ЗАМЕНИЛ view_deadlines на portal_deadlines (убедись, что твой обработчик дедлайнов называется именно так, или впиши нужное)
+        buttons.append([InlineKeyboardButton("📅 Мои дедлайны", callback_data="portal_deadlines")])
+        # ЗАМЕНИЛ view_rating на portal_rating
+        buttons.append([InlineKeyboardButton("🏆 Мой рейтинг", callback_data="portal_rating")])
+        # ЗАМЕНИЛ unlink_portal на portal_unbind
+        buttons.append([InlineKeyboardButton("❌ Отвязать портал", callback_data="portal_unbind")])
+
+    buttons.append([InlineKeyboardButton("◀️ Главное меню", callback_data="main_menu")])
 
     return InlineKeyboardMarkup(buttons)
 
@@ -201,17 +224,6 @@ def get_profile_keyboard(is_portal_linked: bool = False) -> InlineKeyboardMarkup
             InlineKeyboardButton("🔔 Уведомления", callback_data="notif_menu")
         ]
     ]
-
-    # Кнопки портала УрГЭУ
-    if is_portal_linked:
-        buttons.append([
-            InlineKeyboardButton("📊 Мой рейтинг", callback_data="portal_rating"),
-            InlineKeyboardButton("❌ Отвязать портал", callback_data="portal_unbind")
-        ])
-    else:
-        buttons.append([
-            InlineKeyboardButton("🔗 Привязать портал УрГЭУ", callback_data="portal_bind")
-        ])
 
     buttons.append([
         InlineKeyboardButton("◀️ Главное меню", callback_data="main_menu")
@@ -639,6 +651,31 @@ async def handle_callback(
         query.data = "notif_menu"
         await handle_callback(update, context)
         return
+
+    elif data == "portal_menu":
+        users = get_users_cache()
+        uid = str(chat_id)
+        user_data = users.get(uid, {})
+
+        # Проверяем, есть ли у пользователя логин и пароль от портала.
+        # (Замени ключи "portal_login" и "portal_password", если в базе они названы иначе)
+        is_linked = bool(user_data.get("portal_login") and user_data.get("portal_password"))
+
+        status_text = "✅ **Аккаунт привязан**" if is_linked else "❌ **Аккаунт не привязан**"
+
+        text = (
+            "🌐 **Портал УрГЭУ**\n\n"
+            "Здесь находится интеграция с образовательным порталом.\n"
+            f"Статус: {status_text}\n\n"
+            "Привяжите аккаунт, чтобы смотреть свои дедлайны по предметам и текущий рейтинг прямо в боте."
+        )
+
+        await query.edit_message_caption(
+            caption=text,
+            reply_markup=get_portal_keyboard(is_linked),
+            parse_mode="Markdown"
+        )
+        return
     # Подменю настройки пар (твое прежнее меню)
     if data == "pairs_notif_menu":
         notifs = load_notifications()
@@ -987,9 +1024,17 @@ async def handle_callback(
         context.user_data.pop("portal_password", None)
         await query.answer("Личный кабинет портала успешно отвязан!", show_alert=True)
 
-        prof_text, _ = get_profile_data(chat_id, query.from_user.first_name)
-        await query.edit_message_caption(caption=prof_text, reply_markup=get_profile_keyboard(False),
-                                         parse_mode="Markdown")
+        text = (
+            "🌐 **Портал УрГЭУ**\n\n"
+            "Здесь находится интеграция с образовательным порталом.\n"
+            "Статус: ❌ **Аккаунт не привязан**\n\n"
+            "Привяжите аккаунт, чтобы смотреть свои дедлайны по предметам и текущий рейтинг прямо в боте."
+        )
+        await query.edit_message_caption(
+            caption=text,
+            reply_markup=get_portal_keyboard(False),
+            parse_mode="Markdown"
+        )
         return
     elif data == "unlink_group":
         await query.answer("Группа отвязана")
@@ -1397,6 +1442,12 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # --- 1. ПРОВЕРКА ВВОДА ВРЕМЕНИ ДЛЯ УВЕДОМЛЕНИЙ ---
     if context.user_data.get("waiting_for_notif_time"):
+        # Сразу удаляем сообщение пользователя с цифрами
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
         import re
         if re.match(r"^([01]?[0-9]|2[0-3]):[0-5][0-9]$", text):
             uid = str(update.effective_user.id)
@@ -1413,13 +1464,32 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             notifs[uid]["time"] = formatted_time
 
             await save_notif_db(uid, notifs[uid])
-
             context.user_data["waiting_for_notif_time"] = False
-            await update.message.reply_text(f"✅ Время ежедневных уведомлений установлено на {formatted_time}!")
+
+            # Меняем текст самого меню, чтобы не плодить сообщения
+            menu_msg_id = context.user_data.get("main_menu_msg_id")
+            if menu_msg_id:
+                try:
+                    # Убедись, что get_notif_keyboard импортирована или доступна здесь
+                    await context.bot.edit_message_caption(
+                        chat_id=chat_id,
+                        message_id=menu_msg_id,
+                        caption=f"✅ Время успешно установлено на {formatted_time}!",
+                        reply_markup=get_notif_keyboard(formatted_time)
+                    )
+                except Exception as e:
+                    print(f"Ошибка обновления меню: {e}")
         else:
-            await update.message.reply_text("❌ Ошибка формата. Введите время в формате ЧЧ:ММ (например, 20:30).")
-        return  # <-- КРИТИЧЕСКИ ВАЖНО! Это остановит код, и он не пойдет создавать тикет
-    # -------------------------------------------------
+            # Ошибку тоже делаем временной
+            err_msg = await update.message.reply_text("❌ Ошибка. Введите время в формате ЧЧ:ММ (например, 20:30).")
+            import asyncio
+            await asyncio.sleep(3)
+            try:
+                await err_msg.delete()
+            except:
+                pass
+        return
+        # -------------------------------------------------
 
 
     if context.user_data.get("waiting_for_group"):
@@ -1427,8 +1497,7 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         try:
             await update.message.delete()
         except Exception:
-            passч
-
+            pass
         # 2. Удаляем сообщение бота "Введи номер своей группы"
         prompt_id = context.user_data.pop("group_prompt_msg_id", None)
         if prompt_id:
