@@ -60,6 +60,10 @@ BANNERS = {
     "date": "banners/date.png",
     "subgroup": "banners/subgroup.png",
     "feedback": "banners/feedback.png",
+    "notifications": "banners/notif.jpg",
+    "portal": "banners/portal.jpg",
+    "choose_day": "banners/choose_day.jpg",
+    "profile": "banners/profile.jpg"
 }
 
 # --- РАБОТА С ФАЙЛАМИ JSON ---
@@ -2095,7 +2099,11 @@ async def show_notifications_hub(query, context):
         [InlineKeyboardButton("Напоминания о парах", callback_data="schedule_notify_settings")],
         [InlineKeyboardButton("‹ В главное меню", callback_data="back_to_main")]
     ]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    with open(BANNERS["notifications"], "rb") as photo:
+        await query.edit_message_media(
+            media=InputMediaPhoto(media=photo, caption=text, parse_mode="HTML"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
 
 async def show_deadline_settings(query, context, toggle_key=None):
@@ -2131,7 +2139,11 @@ async def show_deadline_settings(query, context, toggle_key=None):
         [InlineKeyboardButton(btn_3h, callback_data="set_deadline:3h")],
         [InlineKeyboardButton("‹ Назад в уведомления", callback_data="notif_menu")]
     ]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    with open(BANNERS["notifications"], "rb") as photo:
+        await query.edit_message_media(
+            media=InputMediaPhoto(media=photo, caption=text, parse_mode="HTML"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
 
 async def show_schedule_notify_settings(query, context, toggle_key=None):
@@ -2163,7 +2175,11 @@ async def show_schedule_notify_settings(query, context, toggle_key=None):
         [InlineKeyboardButton(btn_before, callback_data="set_sched:before_pair")],
         [InlineKeyboardButton("‹ Назад в уведомления", callback_data="notif_menu")]
     ]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    with open(BANNERS["notifications"], "rb") as photo:
+        await query.edit_message_media(
+            media=InputMediaPhoto(media=photo, caption=text, parse_mode="HTML"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 def main() -> None:
     threading.Thread(target=run_fake_server, daemon=True).start()
 
