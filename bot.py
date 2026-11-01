@@ -52,19 +52,25 @@ def md_esc(value) -> str:
     return re.sub(r"([_*`\[])", r"\\\1", str(value))
 TICKETS_FILE = "tickets.json"
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Шапка каждого экрана. Файлы лежат в папке banners/ рядом с bot.py.
 BANNERS = {
-    "main": "banners/main.png",
-    "today": "banners/today.png",
-    "tomorrow": "banners/tomorrow.png",
-    "week": "banners/week.png",
-    "date": "banners/date.png",
-    "subgroup": "banners/subgroup.png",
-    "feedback": "banners/feedback.png",
-    "notifications": "banners/notif.jpg",
-    "portal": "banners/portal.jpg",
-    "choose_day": "banners/choose_day.jpg",
-    "profile": "banners/profile.jpg"
+    "main": "banners/main.png",              # главное меню
+    "today": "banners/today.png",            # Сегодня
+    "tomorrow": "banners/tomorrow.png",      # Завтра
+    "week": "banners/week.png",              # Текущая неделя
+    "date": "banners/date.png",              # Выбрать день
+    "profile": "banners/profile.png",        # Личный кабинет
+    "notifications": "banners/notif.png",    # Уведомления
+    "portal": "banners/portal.png",          # Портал УрГЭУ
+    "feedback": "banners/feedback.png",      # Поддержка / Идеи
+    "subgroup": "banners/main.png",          # отдельной шапки нет — используем главную
 }
+BANNERS = {k: os.path.join(BASE_DIR, v) for k, v in BANNERS.items()}
+for _key, _path in BANNERS.items():
+    if not os.path.exists(_path):
+        print(f"[WARN] Шапка '{_key}' не найдена: {_path}")
 
 # --- РАБОТА С ФАЙЛАМИ JSON ---
 def load_tickets() -> dict:
@@ -700,6 +706,33 @@ def build_deadlines_html(items: list, total_count: int, max_len: int = 3900) -> 
     return text
 
 
+async def swap_banner(query, text, reply_markup, banner_key, parse_mode="Markdown"):
+    """Показывает экран с нужной шапкой: меняет и фото, и подпись у текущего сообщения."""
+    path = BANNERS.get(banner_key, BANNERS["main"])
+    try:
+        with open(path, "rb") as photo:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=photo, caption=text, parse_mode=parse_mode),
+                reply_markup=reply_markup,
+            )
+    except BadRequest as e:
+        if "not modified" in str(e).lower():
+            return
+        # сообщение нельзя отредактировать (например, оно без фото) — пересоздаём
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        with open(path, "rb") as photo:
+            await query.get_bot().send_photo(
+                chat_id=query.message.chat_id,
+                photo=photo,
+                caption=text,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
+            )
+
+
 # --- CALLBACK QUERY HANDLER ---
 async def handle_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -795,7 +828,7 @@ async def handle_callback(
             [InlineKeyboardButton("Уведомления о парах", callback_data="pairs_notif_menu")],
             [InlineKeyboardButton("‹ В главное меню", callback_data="main_menu")]
         ]
-        with open(BANNERS["main"], "rb") as photo:
+        with open(BANNERS["notifications"], "rb") as photo:
             await query.edit_message_media(
                 media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
                 reply_markup=InlineKeyboardMarkup(buttons),
@@ -854,28 +887,7 @@ async def handle_callback(
             "Привяжите аккаунт, чтобы смотреть дедлайны по предметам и текущий рейтинг прямо в боте."
         )
 
-        try:
-            await query.edit_message_caption(
-                caption=text,
-                reply_markup=get_portal_keyboard(is_linked),
-                parse_mode="Markdown"
-            )
-        except BadRequest as e:
-            if "not modified" in str(e).lower():
-                return
-            # текущее сообщение без фото (длинный список) — пересоздаём меню с баннером
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            with open(BANNERS["main"], "rb") as photo:
-                await context.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=photo,
-                    caption=text,
-                    parse_mode="Markdown",
-                    reply_markup=get_portal_keyboard(is_linked),
-                )
+        await swap_banner(query, text, get_portal_keyboard(is_linked), "portal")
         return
     # Подменю настройки пар (твое прежнее меню)
     if data == "pairs_notif_menu":
@@ -897,7 +909,7 @@ async def handle_callback(
         # Добавляем кнопку возврата в хаб уведомлений
         new_kb = list(keyboard_buttons) + [[InlineKeyboardButton("‹ Назад в уведомления", callback_data="notif_menu")]]
 
-        with open(BANNERS["main"], "rb") as photo:
+        with open(BANNERS["notifications"], "rb") as photo:
             await query.edit_message_media(
                 media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
                 reply_markup=InlineKeyboardMarkup(new_kb),
@@ -927,7 +939,7 @@ async def handle_callback(
                 [InlineKeyboardButton(btn_3h, callback_data="toggle_dl:3h")],
                 [InlineKeyboardButton("‹ Назад в уведомления", callback_data="notif_menu")]
             ]
-            with open(BANNERS["main"], "rb") as photo:
+            with open(BANNERS["notifications"], "rb") as photo:
                 await query.edit_message_media(
                     media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
                     reply_markup=InlineKeyboardMarkup(buttons),
@@ -962,7 +974,7 @@ async def handle_callback(
                 [InlineKeyboardButton(btn_3h, callback_data="toggle_dl:3h")],
                 [InlineKeyboardButton("‹ Назад в уведомления", callback_data="notif_menu")]
             ]
-            with open(BANNERS["main"], "rb") as photo:
+            with open(BANNERS["notifications"], "rb") as photo:
                 await query.edit_message_media(
                     media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
                     reply_markup=InlineKeyboardMarkup(buttons),
@@ -997,7 +1009,7 @@ async def handle_callback(
                 [InlineKeyboardButton("Привязать портал", callback_data="portal_bind")],
                 [InlineKeyboardButton("‹ Назад в портал", callback_data="portal_menu")]
             ]
-            with open(BANNERS["main"], "rb") as photo:
+            with open(BANNERS["portal"], "rb") as photo:
                 await query.edit_message_media(
                     media=InputMediaPhoto(media=photo, caption=warn_text, parse_mode="Markdown"),
                     reply_markup=InlineKeyboardMarkup(buttons),
@@ -1007,12 +1019,12 @@ async def handle_callback(
         # Показываем плашку загрузки
         loading_text = (
             "↻ *Сканирую портал УрГЭУ...*\n"
-            "─\n"
+            f"{DIV}\n"
             "Проверяю 12 учебных курсов на наличие тестов и заданий.\n"
             "Пожалуйста, подожди несколько секунд..."
         )
         try:
-            with open(BANNERS["main"], "rb") as photo:
+            with open(BANNERS["portal"], "rb") as photo:
                 await query.edit_message_media(
                     media=InputMediaPhoto(media=photo, caption=loading_text, parse_mode="Markdown"),
                     reply_markup=InlineKeyboardMarkup(
@@ -1082,7 +1094,7 @@ async def handle_callback(
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
         else:
-            with open(BANNERS["main"], "rb") as photo:
+            with open(BANNERS["portal"], "rb") as photo:
                 await query.edit_message_media(
                     media=InputMediaPhoto(media=photo, caption=text, parse_mode="HTML"),
                     reply_markup=InlineKeyboardMarkup(buttons)
@@ -1124,7 +1136,7 @@ async def handle_callback(
                 return
             except BadRequest:
                 pass
-        with open(BANNERS["main"], "rb") as photo:
+        with open(BANNERS["profile"], "rb") as photo:
             try:
                 # Если сообщение уже с фото — просто обновляем медиа и текст
                 await query.edit_message_media(
@@ -1199,11 +1211,7 @@ async def handle_callback(
             "Аккаунт  —  ⚪ не привязан\n\n"
             "Привяжите аккаунт, чтобы смотреть дедлайны по предметам и текущий рейтинг прямо в боте."
         )
-        await query.edit_message_caption(
-            caption=text,
-            reply_markup=get_portal_keyboard(False),
-            parse_mode="Markdown"
-        )
+        await swap_banner(query, text, get_portal_keyboard(False), "portal")
         return
     elif data == "unlink_group":
         await query.answer("Группа отвязана")
@@ -1310,7 +1318,7 @@ async def handle_callback(
             "◆ *Смена фото профиля*\n\n"
             "Пришлите мне фотографию следующим сообщением, и она будет установлена в вашем личном кабинете!"
         )
-        with open(BANNERS["main"], "rb") as photo:
+        with open(BANNERS["profile"], "rb") as photo:
             await query.edit_message_media(
                 media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
                 reply_markup=SCHEDULE_KEYBOARD,
@@ -1391,14 +1399,14 @@ async def handle_callback(
             reply_markup = get_support_keyboard(has_active_ticket=True)
         else:
             text = (
-                "🆘 *СЛУЖБА ПОДДЕРЖКИ*\n"
-                "────────────────────\n"
+                "◆ *СЛУЖБА ПОДДЕРЖКИ*\n"
+                f"{DIV}\n"
                 "Нашли ошибку в расписании, кабинете или преподавателе?\n\n"
                 "Нажмите кнопку ниже, чтобы создать обращение. Администратор увидит его и даст ответ."
             )
             reply_markup = get_support_keyboard(has_active_ticket=False)
 
-        with open(BANNERS["main"], "rb") as photo:
+        with open(BANNERS["feedback"], "rb") as photo:
             await query.edit_message_media(
                 media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
                 reply_markup=reply_markup,
@@ -1418,7 +1426,7 @@ async def handle_callback(
         cancel_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✕ Отмена", callback_data="feedback")]
         ])
-        with open(BANNERS["main"], "rb") as photo:
+        with open(BANNERS["feedback"], "rb") as photo:
             await query.edit_message_media(
                 media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
                 reply_markup=cancel_kb,
@@ -1432,7 +1440,7 @@ async def handle_callback(
 
         text = "✓ *Ваше обращение закрыто.*\n\nВы всегда можете посмотреть его в разделе «Мои обращения»."
         reply_markup = get_support_keyboard(has_active_ticket=False)
-        with open(BANNERS["main"], "rb") as photo:
+        with open(BANNERS["feedback"], "rb") as photo:
             await query.edit_message_media(
                 media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
                 reply_markup=reply_markup,
@@ -1446,7 +1454,7 @@ async def handle_callback(
             "Выберите тикет для просмотра истории переписки:"
         )
         reply_markup = get_user_tickets_keyboard(chat_id)
-        with open(BANNERS["main"], "rb") as photo:
+        with open(BANNERS["feedback"], "rb") as photo:
             await query.edit_message_media(
                 media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
                 reply_markup=reply_markup,
@@ -1476,7 +1484,7 @@ async def handle_callback(
             kb = [[InlineKeyboardButton("‹ К списку обращений", callback_data="ticket_history")]]
             reply_markup = InlineKeyboardMarkup(kb)
 
-        with open(BANNERS["main"], "rb") as photo:
+        with open(BANNERS["feedback"], "rb") as photo:
             await query.edit_message_media(
                 media=InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"),
                 reply_markup=reply_markup,
@@ -1736,11 +1744,11 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             try:
                 prof_text = (
                     f"◆ *Поступил ответ по обращению #{target_ticket_id}!*\n"
-                    f"────────────────────\n"
+                    f"{DIV}\n"
                     f"Ответ администратора:\n> {text}\n\n"
                     f"Вы можете посмотреть историю в разделе «Поддержка»."
                 )
-                with open(BANNERS["main"], "rb") as photo:
+                with open(BANNERS["feedback"], "rb") as photo:
                     await context.bot.send_photo(
                         chat_id=target_user_id,
                         photo=photo,
@@ -1873,7 +1881,7 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 if len(schedule_text) > 1020:
                     schedule_text = schedule_text[:1015] + "..."
 
-                banner_img = BANNERS.get("date") or BANNERS["main"]
+                banner_img = BANNERS.get("date") or BANNERS["date"]
                 with open(banner_img, "rb") as photo:
                     await context.bot.edit_message_media(
                         chat_id=chat_id,
@@ -1935,7 +1943,7 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         menu_id = context.user_data.get("menu_message_id") or context.user_data.get("main_menu_msg_id")
         card_text = (
             f"✓ *Сообщение добавлено в обращение #{ticket_id}!*\n"
-            f"────────────────────\n"
+            f"{DIV}\n"
             f"Администратор уже получил ваше уведомление.\n"
             f"Вы сможете посмотреть ответ прямо в этом меню."
         )
@@ -1943,7 +1951,7 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         if menu_id:
             try:
-                with open(BANNERS["main"], "rb") as photo:
+                with open(BANNERS["feedback"], "rb") as photo:
                     await context.bot.edit_message_media(
                         chat_id=chat_id,
                         message_id=menu_id,
@@ -1954,7 +1962,7 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             except Exception:
                 pass
 
-        with open(BANNERS["main"], "rb") as photo:
+        with open(BANNERS["feedback"], "rb") as photo:
             await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=photo,
