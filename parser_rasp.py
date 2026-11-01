@@ -34,7 +34,7 @@ def fetch_raw_schedule(
 
 
 # --- ОФОРМЛЕНИЕ -------------------------------------------------------------
-# Единый стиль бота: ◆ заголовок, ▸ пункт, ─ разделитель, ▲ внимание.
+# Единый стиль бота: эмодзи-метки разделов в чёрно-красной палитре шапок, ─ разделитель.
 DIV = "─" * 20
 
 
@@ -51,6 +51,9 @@ def _fmt_time(slot: str) -> str:
 def _short_date(date_str: str) -> str:
     """02.11.2026 -> 02.11"""
     return date_str[:5] if len(date_str) >= 10 and date_str[2:3] == "." else date_str
+
+
+_KEYCAPS = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣", 7: "7️⃣", 8: "8️⃣", 9: "9️⃣"}
 
 
 def _plural_pairs(n: int) -> str:
@@ -73,7 +76,7 @@ def _skip_by_subgroup(item: dict, subgroup: int | None) -> bool:
 
 def _group_line(group_name: str, subgroup: int | None) -> str:
     sub = f"  ·  подгруппа {subgroup}" if subgroup else ""
-    return f"Группа  `{group_name}`{sub}"
+    return f"🎓 Группа  `{group_name}`{sub}"
 
 
 def format_day_schedule(day_data: dict, group_name: str, subgroup: int | None = None) -> str:
@@ -81,7 +84,7 @@ def format_day_schedule(day_data: dict, group_name: str, subgroup: int | None = 
     weekday = day_data.get("weekDay", "")
 
     lines = [
-        f"◆ *{_esc(weekday.upper())}*  ·  {date_str}",
+        f"📅 *{_esc(weekday.upper())}*  ·  {date_str}",
         _group_line(group_name, subgroup),
         DIV,
     ]
@@ -100,25 +103,25 @@ def format_day_schedule(day_data: dict, group_name: str, subgroup: int | None = 
         num = pair.get("N", "")
         time_slot = _fmt_time(pair.get("time", ""))
 
-        lines.append(f"\n*{num} пара*  ·  `{time_slot}`")
+        lines.append(f"\n⏰ *{num} пара*  ·  `{time_slot}`")
 
         for item in filtered:
             subj = item.get("subject", "Предмет не указан").strip()
             teacher = item.get("teacher", "").strip()
             aud = item.get("aud", "").strip()
 
-            lines.append(f"▸ *{_esc(subj)}*")
+            lines.append(f"📚 *{_esc(subj)}*")
 
             details = []
             if aud:
-                details.append(f"ауд. {_esc(aud)}")
+                details.append(f"📍 ауд. {_esc(aud)}")
             if teacher:
-                details.append(_esc(teacher))
+                details.append(f"👤 {_esc(teacher)}")
             if details:
-                lines.append("   " + "  ·  ".join(details))
+                lines.append("     " + "  ·  ".join(details))
 
     if not has_pairs:
-        lines.append("\nЗанятий нет — свободный день.")
+        lines.append("\n🎉 Занятий нет — свободный день!")
 
     lines.append("\n" + DIV)
     return "\n".join(lines)
@@ -129,7 +132,7 @@ def get_schedule_for_date(group: str, target_date: datetime, subgroup: int | Non
     data = fetch_raw_schedule(group, date_str, date_str)
 
     if not data:
-        return f"▲ Не удалось загрузить расписание на *{date_str}*."
+        return f"⚠️ Не удалось загрузить расписание на *{date_str}*."
 
     return format_day_schedule(data[0], group, subgroup)
 
@@ -150,10 +153,10 @@ def get_schedule_for_week(
 
     data = fetch_raw_schedule(group, start_str, end_str)
     if not data:
-        return "▲ Не удалось получить расписание на неделю."
+        return "⚠️ Не удалось получить расписание на неделю."
 
     lines = [
-        f"◆ *НЕДЕЛЯ*  ·  {start_str[:5]} — {end_str[:5]}",
+        f"🗓 *НЕДЕЛЯ*  ·  {start_str[:5]} — {end_str[:5]}",
         _group_line(group, subgroup),
         DIV,
     ]
@@ -174,17 +177,17 @@ def get_schedule_for_week(
                 aud = item.get("aud", "").strip()
                 t_slot = pair.get("time", "").split("-")[0].strip()  # только время начала
 
-                aud_str = f"  ·  ауд. {_esc(aud)}" if aud else ""
-                day_pairs.append(f"`{t_slot}`  {subj}{aud_str}")
+                aud_str = f"  ·  📍 {_esc(aud)}" if aud else ""
+                day_pairs.append(f"⏰ `{t_slot}`  {subj}{aud_str}")
 
         if day_pairs:
             has_any_lesson = True
-            lines.append(f"\n*{_esc(weekday)}*  ·  {date_str}")
+            lines.append(f"\n📌 *{_esc(weekday)}*  ·  {date_str}")
             for p_str in day_pairs:
-                lines.append(f"▸ {p_str}")
+                lines.append(p_str)
 
     if not has_any_lesson:
-        lines.append("\nНа этой неделе пар нет.")
+        lines.append("\n🎉 На этой неделе пар нет.")
 
     return "\n".join(lines)
 
@@ -197,7 +200,7 @@ def get_short_schedule_for_date(
     date_short = target_date.strftime("%d.%m")
     data = fetch_raw_schedule(group, date_str, date_str)
 
-    no_pairs = f"◆ *ЗАВТРА*  ·  {date_short}\n{DIV}\nПар нет — можно отдыхать."
+    no_pairs = f"🔔 *Завтра  ·  {date_short}*\n\n🎉 Пар нет — можно отдыхать!"
 
     if not data or not data[0].get("pairs"):
         return no_pairs
@@ -230,14 +233,14 @@ def get_short_schedule_for_date(
         return no_pairs
 
     lines = [
-        f"◆ *ЗАВТРА*  ·  {date_short}  ·  {_plural_pairs(len(valid_pairs))}",
-        DIV,
+        f"🔔 *Завтра  ·  {date_short}*  —  {_plural_pairs(len(valid_pairs))}",
+        "",
     ]
     for i, subj in enumerate(valid_pairs, 1):
-        lines.append(f"*{i}*  {_esc(subj)}")
+        lines.append(f"{_KEYCAPS.get(i, str(i))} {_esc(subj)}")
 
     if first_time and last_time:
-        lines.append(f"\nЗанятия  `{first_time} – {last_time}`")
+        lines.append(f"\n⏰ Занятия  `{first_time} – {last_time}`")
 
     return "\n".join(lines)
 
